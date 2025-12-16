@@ -1,9 +1,9 @@
 {
-  "uid": "invoice_manager_company_tab",
+  "uid": "invoice_manager_company_card",
   "type": "card",
   "config": {
     "name": "Invoice Manager",
-    "location": "crm.record.tab",
+    "location": "crm.record.sidebar",
     "objectTypes": ["companies"],
     "entrypoint": "/app/cards/invoice-manager-tab.jsx"
   }

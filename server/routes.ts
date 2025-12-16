@@ -95,12 +95,14 @@ export async function registerRoutes(
         ["name", "bad_debt"]
       );
 
-      const dealsResponse = await hubspotClient.crm.companies.associationsApi.getAll(
+      const dealsResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
+        "companies",
         companyId,
         "deals"
       );
 
-      const invoicesResponse = await hubspotClient.crm.companies.associationsApi.getAll(
+      const invoicesResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
+        "companies",
         companyId,
         "invoices"
       );

@@ -477,9 +477,11 @@ export default function InvoiceManager() {
   const invoices = companyData?.invoices || [];
   const paidInvoices = invoices.filter(inv => inv.hs_invoice_status.toLowerCase() === "paid");
   const overdueInvoices = invoices.filter(inv => isInvoiceOverdue(inv));
+  const badDebtInvoices = invoices.filter(inv => inv.bad_debt === "true");
   
   const paidAmount = paidInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
+  const badDebtAmount = badDebtInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const overdueCount = overdueInvoices.length;
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
@@ -523,6 +525,12 @@ export default function InvoiceManager() {
                     <p className="text-xs text-muted-foreground uppercase tracking-wide">Overdue</p>
                     <p className="text-lg font-semibold text-destructive">
                       {isLoading ? "-" : formatCurrency(overdueAmount)}
+                    </p>
+                  </div>
+                  <div className="text-right" data-testid="summary-bad-debt">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Bad Debt</p>
+                    <p className="text-lg font-semibold text-orange-600 dark:text-orange-400">
+                      {isLoading ? "-" : formatCurrency(badDebtAmount)}
                     </p>
                   </div>
                 </div>

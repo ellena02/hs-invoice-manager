@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
@@ -16,6 +15,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { 
   CheckCircle2, 
@@ -27,10 +34,12 @@ import {
   RefreshCw,
   Search,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  AlertTriangle,
+  Trash2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { CompanyData, MarkBadDebtResponse, Deal, Invoice } from "@shared/schema";
+import type { CompanyData, ArchiveOverdueInvoicesResponse, Deal, Invoice } from "@shared/schema";
 
 const DEMO_COMPANY_ID = "demo-company-123";
 const PAGE_SIZE = 10;
@@ -302,7 +311,11 @@ function InvoicesTable({ invoices, isLoading }: { invoices: Invoice[]; isLoading
               </TableHeader>
               <TableBody>
                 {paginatedInvoices.map((invoice) => (
-                  <TableRow key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
+                  <TableRow 
+                    key={invoice.id} 
+                    data-testid={`row-invoice-${invoice.id}`}
+                    className={invoice.hs_invoice_status.toLowerCase() === "overdue" ? "bg-destructive/5" : ""}
+                  >
                     <TableCell className="font-medium" data-testid={`text-invoice-number-${invoice.id}`}>
                       {invoice.hs_invoice_number}
                     </TableCell>
@@ -332,36 +345,49 @@ function InvoicesTable({ invoices, isLoading }: { invoices: Invoice[]; isLoading
 export default function InvoiceManager() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
   const { data: companyData, isLoading, refetch, isRefetching } = useQuery<CompanyData>({
     queryKey: ["/api/company", DEMO_COMPANY_ID],
   });
 
-  const markBadDebtMutation = useMutation<MarkBadDebtResponse, Error, boolean>({
-    mutationFn: async (badDebt: boolean) => {
-      const response = await apiRequest("POST", "/api/mark-bad-debt", {
-        companyId: DEMO_COMPANY_ID,
-        badDebt,
-      });
+  const archiveOverdueMutation = useMutation<ArchiveOverdueInvoicesResponse, Error>({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/archive-overdue-invoices`, {});
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setErrorMessage(null);
-      setSuccessMessage("Bad debt status updated successfully.");
+      setShowConfirmDialog(false);
+      if (data.archivedCount > 0) {
+        setSuccessMessage(`Successfully archived ${data.archivedCount} overdue invoice(s): ${data.archivedInvoices.join(", ")}. Company marked as bad debt.`);
+      } else {
+        setSuccessMessage("Company marked as bad debt. No overdue invoices to archive.");
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
-      setTimeout(() => setSuccessMessage(null), 3000);
+      setTimeout(() => setSuccessMessage(null), 5000);
     },
     onError: (error) => {
       setSuccessMessage(null);
-      setErrorMessage(error.message || "Failed to update bad debt status.");
+      setShowConfirmDialog(false);
+      setErrorMessage(error.message || "Failed to archive overdue invoices.");
       setTimeout(() => setErrorMessage(null), 5000);
     },
   });
 
+  const overdueCount = companyData?.overdueCount || 0;
+  const overdueInvoices = companyData?.invoices?.filter(inv => inv.hs_invoice_status.toLowerCase() === "overdue") || [];
+  const totalOverdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
-  const handleToggleChange = (checked: boolean) => {
-    markBadDebtMutation.mutate(checked);
+  const handleMarkBadDebt = () => {
+    if (overdueCount > 0) {
+      setShowConfirmDialog(true);
+    }
+  };
+
+  const handleConfirmArchive = () => {
+    archiveOverdueMutation.mutate();
   };
 
   return (
@@ -394,29 +420,46 @@ export default function InvoiceManager() {
           </CardHeader>
           
           <CardContent className="space-y-6">
-            <div className="flex items-center justify-between gap-4 p-4 bg-muted/50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="bad-debt-toggle"
-                  checked={badDebtValue}
-                  onCheckedChange={handleToggleChange}
-                  disabled={markBadDebtMutation.isPending || isLoading}
-                  data-testid="switch-bad-debt"
-                />
-                <Label 
-                  htmlFor="bad-debt-toggle" 
-                  className="text-sm font-medium cursor-pointer"
-                  data-testid="label-bad-debt"
-                >
-                  Mark invoices as bad debt
-                </Label>
-              </div>
-              {markBadDebtMutation.isPending && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span data-testid="text-updating">Updating...</span>
+            <div className="p-4 bg-muted/50 rounded-lg space-y-4">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium" data-testid="label-bad-debt">
+                    Mark as Bad Debt
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    {overdueCount > 0 
+                      ? `${overdueCount} overdue invoice${overdueCount > 1 ? "s" : ""} totaling ${formatCurrency(totalOverdueAmount.toString())} will be archived`
+                      : "No overdue invoices to archive"
+                    }
+                  </p>
                 </div>
-              )}
+                <div className="flex items-center gap-3">
+                  {badDebtValue && (
+                    <Badge variant="destructive" className="gap-1">
+                      <AlertTriangle className="h-3 w-3" />
+                      Bad Debt
+                    </Badge>
+                  )}
+                  <Button
+                    variant="destructive"
+                    onClick={handleMarkBadDebt}
+                    disabled={archiveOverdueMutation.isPending || isLoading || overdueCount === 0 || badDebtValue}
+                    data-testid="button-mark-bad-debt"
+                  >
+                    {archiveOverdueMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Archive Overdue Invoices
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
             </div>
 
             {errorMessage && (
@@ -450,15 +493,73 @@ export default function InvoiceManager() {
             <Separator />
 
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold flex items-center gap-2" data-testid="text-invoices-header">
-                <DollarSign className="h-5 w-5 text-muted-foreground" />
-                Associated Invoices
-              </h3>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h3 className="text-lg font-semibold flex items-center gap-2" data-testid="text-invoices-header">
+                  <DollarSign className="h-5 w-5 text-muted-foreground" />
+                  Associated Invoices
+                </h3>
+                {overdueCount > 0 && (
+                  <Badge variant="destructive" data-testid="badge-overdue-count">
+                    {overdueCount} Overdue
+                  </Badge>
+                )}
+              </div>
               <InvoicesTable invoices={companyData?.invoices || []} isLoading={isLoading} />
             </div>
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <DialogContent data-testid="dialog-confirm-archive">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Confirm Bad Debt Action
+            </DialogTitle>
+            <DialogDescription className="space-y-3 pt-2">
+              <p>
+                You are about to mark this company as bad debt. This will:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm">
+                <li>Archive {overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""}</li>
+                <li>Total amount: {formatCurrency(totalOverdueAmount.toString())}</li>
+                <li>Mark the company with a "Bad Debt" flag</li>
+              </ul>
+              <p className="text-sm text-muted-foreground">
+                Archived invoices can be restored from HubSpot's recycle bin within 90 days.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setShowConfirmDialog(false)}
+              data-testid="button-cancel-archive"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmArchive}
+              disabled={archiveOverdueMutation.isPending}
+              data-testid="button-confirm-archive"
+            >
+              {archiveOverdueMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Archiving...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Archive & Mark Bad Debt
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

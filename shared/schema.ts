@@ -11,6 +11,8 @@ export interface MarkBadDebtResponse {
   success: boolean;
   bad_debt?: string;
   message?: string;
+  archivedCount?: number;
+  archivedInvoices?: string[];
 }
 
 export interface HealthResponse {
@@ -43,4 +45,18 @@ export interface CompanyData {
   company: Company | null;
   deals: Deal[];
   invoices: Invoice[];
+  overdueCount?: number;
+}
+
+export const archiveOverdueInvoicesRequestSchema = z.object({
+  companyId: z.string().min(1, "Company ID is required"),
+});
+
+export type ArchiveOverdueInvoicesRequest = z.infer<typeof archiveOverdueInvoicesRequestSchema>;
+
+export interface ArchiveOverdueInvoicesResponse {
+  success: boolean;
+  archivedCount: number;
+  archivedInvoices: string[];
+  message?: string;
 }

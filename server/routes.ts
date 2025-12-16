@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { Client as HubSpotClient } from "@hubspot/api-client";
-import { markBadDebtRequestSchema } from "@shared/schema";
+import { markBadDebtRequestSchema, archiveOverdueInvoicesRequestSchema } from "@shared/schema";
 
 const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
@@ -65,11 +65,89 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/company/:companyId/archive-overdue-invoices", async (req, res) => {
+    try {
+      const { companyId } = req.params;
+
+      if (!hubspotClient) {
+        return res.status(200).json({
+          success: true,
+          archivedCount: 1,
+          archivedInvoices: ["INV-2024-003"],
+          message: "Mock response - HubSpot token not configured. In production, overdue invoices would be archived."
+        });
+      }
+
+      const invoicesResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
+        "companies",
+        companyId,
+        "invoices"
+      );
+
+      const overdueInvoices: { id: string; number: string }[] = [];
+      
+      for (const assoc of invoicesResponse.results || []) {
+        try {
+          const invoice = await hubspotClient.crm.objects.basicApi.getById(
+            "invoices",
+            assoc.id,
+            ["hs_invoice_number", "hs_invoice_status"]
+          );
+          
+          if (invoice.properties.hs_invoice_status?.toLowerCase() === "overdue") {
+            overdueInvoices.push({
+              id: invoice.id,
+              number: invoice.properties.hs_invoice_number || invoice.id
+            });
+          }
+        } catch (e) {
+          console.error(`Failed to fetch invoice ${assoc.id}:`, e);
+        }
+      }
+
+      const archivedInvoices: string[] = [];
+      for (const invoice of overdueInvoices) {
+        try {
+          await hubspotClient.crm.objects.basicApi.archive("invoices", invoice.id);
+          archivedInvoices.push(invoice.number);
+        } catch (e) {
+          console.error(`Failed to archive invoice ${invoice.id}:`, e);
+        }
+      }
+
+      await hubspotClient.crm.companies.basicApi.update(companyId, {
+        properties: { bad_debt: "true" },
+      });
+
+      return res.status(200).json({
+        success: true,
+        archivedCount: archivedInvoices.length,
+        archivedInvoices,
+        message: `Successfully archived ${archivedInvoices.length} overdue invoice(s) and marked company as bad debt.`
+      });
+    } catch (error: any) {
+      console.error("Archive overdue invoices error:", error?.response?.body || error);
+      return res.status(500).json({
+        success: false,
+        archivedCount: 0,
+        archivedInvoices: [],
+        message: error?.response?.body?.message || error?.message || "Failed to archive overdue invoices."
+      });
+    }
+  });
+
   app.get("/api/company/:companyId", async (req, res) => {
     try {
       const { companyId } = req.params;
 
       if (!hubspotClient) {
+        const mockInvoices = [
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000" },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000" },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000" },
+        ];
+        const overdueCount = mockInvoices.filter(inv => inv.hs_invoice_status === "overdue").length;
+        
         return res.status(200).json({
           company: {
             id: companyId,
@@ -81,11 +159,8 @@ export async function registerRoutes(
             { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
             { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
           ],
-          invoices: [
-            { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000" },
-            { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000" },
-            { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000" },
-          ],
+          invoices: mockInvoices,
+          overdueCount,
           message: "Mock data - HubSpot token not configured"
         });
       }
@@ -127,6 +202,7 @@ export async function registerRoutes(
       }
 
       const invoices = [];
+      let overdueCount = 0;
       for (const assoc of invoicesResponse.results || []) {
         try {
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
@@ -134,10 +210,14 @@ export async function registerRoutes(
             assoc.id,
             ["hs_invoice_number", "hs_invoice_status", "amount"]
           );
+          const status = invoice.properties.hs_invoice_status || "";
+          if (status.toLowerCase() === "overdue") {
+            overdueCount++;
+          }
           invoices.push({
             id: invoice.id,
             hs_invoice_number: invoice.properties.hs_invoice_number || "",
-            hs_invoice_status: invoice.properties.hs_invoice_status || "",
+            hs_invoice_status: status,
             amount: invoice.properties.amount || null,
           });
         } catch (e) {
@@ -153,6 +233,7 @@ export async function registerRoutes(
         },
         deals,
         invoices,
+        overdueCount,
       });
     } catch (error: any) {
       console.error("Error fetching company data:", error?.response?.body || error);

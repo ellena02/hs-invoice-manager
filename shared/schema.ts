@@ -23,12 +23,22 @@ export const markBadDebtRequestSchema = z.object({
 
 export type MarkBadDebtRequest = z.infer<typeof markBadDebtRequestSchema>;
 
+// Mark bad debt on specific invoice (cascades to deal and company)
+export const markInvoiceBadDebtRequestSchema = z.object({
+  companyId: z.string().min(1, "Company ID is required"),
+  invoiceId: z.string().min(1, "Invoice ID is required"),
+  dealId: z.string().nullable().optional(),
+});
+
+export type MarkInvoiceBadDebtRequest = z.infer<typeof markInvoiceBadDebtRequestSchema>;
+
 export interface MarkBadDebtResponse {
   success: boolean;
   bad_debt?: string;
   message?: string;
-  archivedCount?: number;
-  archivedInvoices?: string[];
+  updatedInvoice?: boolean;
+  updatedDeal?: boolean;
+  updatedCompany?: boolean;
 }
 
 export interface HealthResponse {
@@ -67,23 +77,3 @@ export interface CompanyData {
   overdueCount?: number;
 }
 
-export const archiveOverdueInvoicesRequestSchema = z.object({
-  companyId: z.string().min(1, "Company ID is required"),
-});
-
-export type ArchiveOverdueInvoicesRequest = z.infer<typeof archiveOverdueInvoicesRequestSchema>;
-
-export interface ArchiveOverdueInvoicesResponse {
-  success: boolean;
-  archivedCount: number;
-  archivedInvoices: string[];
-  failedInvoices?: { number: string; reason: string }[];
-  message?: string;
-}
-
-export interface ArchiveSingleInvoiceResponse {
-  success: boolean;
-  invoiceId?: string;
-  invoiceNumber?: string;
-  message?: string;
-}

@@ -14,7 +14,10 @@ Preferred communication style: Simple, everyday language.
 
 - **Statuses**: draft, open, paid, voided (HubSpot standard)
 - **Overdue Calculation**: An invoice is overdue when status is "open" AND due_date < today
-- **Bad Debt Action**: Marks the company with a bad_debt flag (does not archive invoices)
+- **Bad Debt Action**: When clicking "Mark Bad Debt" on an invoice, updates bad_debt property on:
+  1. The specific invoice
+  2. The associated deal (if linked)
+  3. The company
 
 ## System Architecture
 
@@ -45,6 +48,7 @@ Preferred communication style: Simple, everyday language.
 - `GET /api/health` - Health check with connection status
 - `GET /api/company/:companyId` - Fetch company data with deals and invoices
 - `POST /api/mark-bad-debt` - Updates company bad_debt property
+- `POST /api/mark-invoice-bad-debt` - Updates bad_debt on invoice, deal, and company (cascade)
 
 ### Data Layer
 - **ORM**: Drizzle ORM with PostgreSQL dialect

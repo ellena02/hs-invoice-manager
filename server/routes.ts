@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { Client as HubSpotClient } from "@hubspot/api-client";
-import { markBadDebtRequestSchema, archiveOverdueInvoicesRequestSchema } from "@shared/schema";
+import { markBadDebtRequestSchema, markInvoiceBadDebtRequestSchema } from "@shared/schema";
 import { storage } from "./storage";
 
 // OAuth Configuration
@@ -275,6 +275,95 @@ export async function registerRoutes(
         success: false,
         message:
           error?.response?.body?.message || error?.message || "Unexpected backend error.",
+      });
+    }
+  });
+
+  // Mark bad debt on specific invoice (cascades to deal and company)
+  app.post("/api/mark-invoice-bad-debt", async (req, res) => {
+    try {
+      const parseResult = markInvoiceBadDebtRequestSchema.safeParse(req.body);
+      
+      if (!parseResult.success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: parseResult.error.errors[0]?.message || "Invalid request body" 
+        });
+      }
+
+      const { companyId, invoiceId, dealId } = parseResult.data;
+      const portalId = req.query.portalId as string;
+
+      const hubspotClient = await getHubSpotClient(portalId);
+      if (!hubspotClient) {
+        console.warn("HubSpot client not configured - returning mock response");
+        mockState.badDebt = true;
+        return res.status(200).json({ 
+          success: true, 
+          bad_debt: "true",
+          updatedInvoice: true,
+          updatedDeal: !!dealId,
+          updatedCompany: true,
+          message: "Mock response - Marked bad debt on invoice, deal, and company"
+        });
+      }
+
+      let updatedInvoice = false;
+      let updatedDeal = false;
+      let updatedCompany = false;
+
+      // 1. Update invoice bad_debt property
+      try {
+        await hubspotClient.crm.objects.basicApi.update("invoices", invoiceId, {
+          properties: { bad_debt: "true" }
+        });
+        updatedInvoice = true;
+      } catch (e: any) {
+        console.error("Failed to update invoice bad_debt:", e?.response?.body || e);
+      }
+
+      // 2. Update deal bad_debt property (if dealId provided)
+      if (dealId) {
+        try {
+          await hubspotClient.crm.deals.basicApi.update(dealId, {
+            properties: { bad_debt: "true" }
+          });
+          updatedDeal = true;
+        } catch (e: any) {
+          console.error("Failed to update deal bad_debt:", e?.response?.body || e);
+        }
+      }
+
+      // 3. Update company bad_debt property
+      try {
+        await hubspotClient.crm.companies.basicApi.update(companyId, {
+          properties: { bad_debt: "true" }
+        });
+        updatedCompany = true;
+      } catch (e: any) {
+        console.error("Failed to update company bad_debt:", e?.response?.body || e);
+      }
+
+      const updates = [];
+      if (updatedInvoice) updates.push("invoice");
+      if (updatedDeal) updates.push("deal");
+      if (updatedCompany) updates.push("company");
+
+      return res.status(200).json({ 
+        success: true, 
+        bad_debt: "true",
+        updatedInvoice,
+        updatedDeal,
+        updatedCompany,
+        message: updates.length > 0 
+          ? `Marked bad debt on: ${updates.join(", ")}`
+          : "No records were updated"
+      });
+    } catch (error: any) {
+      console.error("Backend mark-invoice-bad-debt error:", error?.response?.body || error);
+      return res.status(500).json({
+        success: false,
+        message: error?.response?.body?.message || error?.message || "Unexpected backend error.",
       });
     }
   });

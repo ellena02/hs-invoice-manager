@@ -246,7 +246,7 @@ function DealsTable({ deals, isLoading }: { deals: Deal[]; isLoading: boolean })
 interface InvoicesTableProps {
   invoices: Invoice[];
   isLoading: boolean;
-  onMarkBadDebt: (invoiceId: string) => void;
+  onMarkBadDebt: (invoice: Invoice) => void;
   markingInvoiceId: string | null;
 }
 
@@ -365,7 +365,7 @@ function InvoicesTable({ invoices, isLoading, onMarkBadDebt, markingInvoiceId }:
                           <Button
                             variant="destructive"
                             size="sm"
-                            onClick={() => onMarkBadDebt(invoice.id)}
+                            onClick={() => onMarkBadDebt(invoice)}
                             disabled={isMarking}
                             data-testid={`button-mark-bad-debt-${invoice.id}`}
                           >
@@ -413,18 +413,19 @@ export default function InvoiceManager() {
   });
 
   const markBadDebtMutation = useMutation({
-    mutationFn: async (_invoiceId: string) => {
-      setMarkingInvoiceId(_invoiceId);
-      const response = await apiRequest("POST", `/api/mark-bad-debt`, {
+    mutationFn: async (invoice: Invoice) => {
+      setMarkingInvoiceId(invoice.id);
+      const response = await apiRequest("POST", `/api/mark-invoice-bad-debt`, {
         companyId: DEMO_COMPANY_ID,
-        badDebt: true
+        invoiceId: invoice.id,
+        dealId: invoice.dealId || null
       });
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { message?: string }) => {
       setErrorMessage(null);
       setMarkingInvoiceId(null);
-      setSuccessMessage("Company marked as bad debt.");
+      setSuccessMessage(data.message || "Marked as bad debt on invoice, deal, and company.");
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
       setTimeout(() => setSuccessMessage(null), 5000);
     },
@@ -466,8 +467,8 @@ export default function InvoiceManager() {
   const overdueCount = overdueInvoices.length;
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
-  const handleMarkBadDebt = (invoiceId: string) => {
-    markBadDebtMutation.mutate(invoiceId);
+  const handleMarkBadDebt = (invoice: Invoice) => {
+    markBadDebtMutation.mutate(invoice);
   };
 
   const handleMarkAllBadDebt = () => {

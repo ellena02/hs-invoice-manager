@@ -3,12 +3,10 @@ import { hubspot, Text, Flex, Button } from "@hubspot/ui-extensions";
 
 type ExtendArgs = {
   context?: any;
-  actions?: any;
 };
 
 hubspot.extend((args: ExtendArgs) => {
   const context = args?.context;
-  const actions = args?.actions;
 
   const companyId =
     context?.crm?.objectId ??
@@ -16,36 +14,24 @@ hubspot.extend((args: ExtendArgs) => {
     context?.objectId ??
     null;
 
-  const canOpen = Boolean(companyId && actions?.openIframeModal);
-
-  const handleOpen = () => {
-    if (!companyId) return;
-    if (!actions?.openIframeModal) return;
-
-    actions.openIframeModal({
-      uri: `https://hs-invoice-manager.onrender.com/?companyId=${companyId}`,
-      title: "Invoice Manager",
-      width: 1200,
-      height: 800,
-    });
-  };
+  const url = companyId
+    ? `https://hs-invoice-manager.onrender.com/?companyId=${companyId}`
+    : "https://hs-invoice-manager.onrender.com/";
 
   return (
     <Flex direction="column" gap="md">
       <Text format={{ fontWeight: "bold" }}>Invoice Manager</Text>
+      <Text>Company ID: {companyId ?? "N/A"}</Text>
 
-      <Text>
-        Company ID: {companyId ?? "N/A"}
-      </Text>
+      <Text>Open the full Invoice Manager UI in a new tab:</Text>
 
-      {!actions?.openIframeModal && (
-        <Text>
-          Modal action not available in this location.
-        </Text>
-      )}
-
-      <Button disabled={!canOpen} onClick={handleOpen}>
-        Open Invoice Manager
+      <Button
+        disabled={!companyId}
+        onClick={() => {
+          window.open(url, "_blank");
+        }}
+      >
+        Open in new tab
       </Button>
     </Flex>
   );

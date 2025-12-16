@@ -454,16 +454,22 @@ export default function InvoiceManager() {
   });
 
   const markAllBadDebtMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/mark-bad-debt`, {
-        companyId: DEMO_COMPANY_ID,
-        badDebt: true
-      });
-      return response.json();
+    mutationFn: async (overdueInvoicesList: Invoice[]) => {
+      const results = await Promise.all(
+        overdueInvoicesList.map(invoice => 
+          apiRequest("POST", `/api/mark-invoice-bad-debt`, {
+            companyId: DEMO_COMPANY_ID,
+            invoiceId: invoice.id,
+            dealId: invoice.dealId || null
+          }).then(res => res.json())
+        )
+      );
+      return results;
     },
-    onSuccess: () => {
+    onSuccess: (results) => {
       setErrorMessage(null);
-      setSuccessMessage("Company marked as bad debt for all overdue invoices.");
+      const count = results.length;
+      setSuccessMessage(`Marked ${count} invoice${count > 1 ? "s" : ""} as bad debt (with associated deals and company).`);
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
       setTimeout(() => setSuccessMessage(null), 5000);
     },
@@ -483,6 +489,7 @@ export default function InvoiceManager() {
   const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const badDebtAmount = badDebtInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const overdueCount = overdueInvoices.length;
+  const unmarkedOverdueCount = overdueInvoices.filter(inv => inv.bad_debt !== "true").length;
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
   const handleMarkBadDebt = (invoice: Invoice) => {
@@ -490,7 +497,10 @@ export default function InvoiceManager() {
   };
 
   const handleMarkAllBadDebt = () => {
-    markAllBadDebtMutation.mutate();
+    const overdueToMark = overdueInvoices.filter(inv => inv.bad_debt !== "true");
+    if (overdueToMark.length > 0) {
+      markAllBadDebtMutation.mutate(overdueToMark);
+    }
   };
 
   return (
@@ -604,7 +614,7 @@ export default function InvoiceManager() {
                   </Badge>
                 )}
               </div>
-              {overdueCount > 0 && !badDebtValue && (
+              {unmarkedOverdueCount > 0 && (
                 <div className="flex items-center gap-2">
                   <Button
                     variant="destructive"
@@ -620,12 +630,12 @@ export default function InvoiceManager() {
                     ) : (
                       <>
                         <Ban className="h-4 w-4 mr-2" />
-                        Mark Company as Bad Debt
+                        Mark All Overdue as Bad Debt
                       </>
                     )}
                   </Button>
                   <span className="text-sm text-muted-foreground">
-                    ({overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""})
+                    ({unmarkedOverdueCount} overdue invoice{unmarkedOverdueCount > 1 ? "s" : ""})
                   </span>
                 </div>
               )}

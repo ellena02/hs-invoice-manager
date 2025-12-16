@@ -544,7 +544,7 @@ export async function registerRoutes(
             );
             if (invoiceDealAssoc.results && invoiceDealAssoc.results.length > 0) {
               dealId = invoiceDealAssoc.results[0].id;
-              dealName = dealMap.get(dealId) || null;
+              dealName = dealId ? (dealMap.get(dealId) || null) : null;
               if (!dealName && dealId) {
                 try {
                   const dealInfo = await hubspotClient.crm.deals.basicApi.getById(dealId, ["dealname"]);

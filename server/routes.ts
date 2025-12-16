@@ -46,6 +46,7 @@ function cleanupOAuthStates() {
     oauthStates.delete(keysToDelete[i]);
   }
 }
+
 function generateOAuthState(): string {
   const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -105,7 +106,9 @@ async function refreshAccessToken(refreshToken: string, portalId: string) {
 }
 
 // Helper to get HubSpot client for a portal (OAuth first, optional private token fallback)
-async function getHubSpotClient(portalId?: string): Promise<HubSpotClient | null> {
+async function getHubSpotClient(
+  portalId?: string
+): Promise<HubSpotClient | null> {
   if (portalId) {
     const token = await storage.getToken(portalId);
     if (token) {
@@ -202,7 +205,9 @@ export async function registerRoutes(
       const portalId = tokenInfo.hubId?.toString();
 
       if (!portalId) {
-        return res.status(500).json({ error: "Could not resolve portalId (hubId)" });
+        return res
+          .status(500)
+          .json({ error: "Could not resolve portalId (hubId)" });
       }
 
       await storage.saveToken({
@@ -276,6 +281,40 @@ export async function registerRoutes(
   });
 
   /**
+   * ✅ NEW: Deal pipeline stages map (stageId -> label)
+   * UI uses this to display dealstage labels without hardcoding.
+   */
+  app.get("/api/pipelines/deals/stages", async (req: Request, res: Response) => {
+    try {
+      const portalId = getPortalId(req);
+      const hubspotClient = await getHubSpotClient(portalId);
+      if (!hubspotClient) return notConnected(res);
+
+      const pipelines = await hubspotClient.crm.pipelines.pipelinesApi.getAll(
+        "deals"
+      );
+
+      const map: Record<string, string> = {};
+      for (const p of pipelines.results || []) {
+        for (const s of p.stages || []) {
+          map[String(s.id)] = String(s.label || s.id);
+        }
+      }
+
+      return res.json(map);
+    } catch (err: any) {
+      console.error("Error fetching deal stages:", err?.response?.body || err);
+      return res.status(500).json({
+        success: false,
+        message:
+          err?.response?.body?.message ||
+          err?.message ||
+          "Failed to fetch deal pipeline stages",
+      });
+    }
+  });
+
+  /**
    * Mark company bad debt
    */
   app.post("/api/mark-bad-debt", async (req, res) => {
@@ -296,7 +335,10 @@ export async function registerRoutes(
       if (!hubspotClient) return notConnected(res);
 
       const isChecked =
-        badDebt === true || badDebt === "true" || badDebt === 1 || badDebt === "1";
+        badDebt === true ||
+        badDebt === "true" ||
+        badDebt === 1 ||
+        badDebt === "1";
       const newValue = isChecked ? "true" : "false";
 
       await hubspotClient.crm.companies.basicApi.update(companyId, {
@@ -349,7 +391,10 @@ export async function registerRoutes(
         updatedInvoice = true;
         updates.push("invoice");
       } catch (e: any) {
-        console.error("Failed to update invoice bad_debt:", e?.response?.body || e);
+        console.error(
+          "Failed to update invoice bad_debt:",
+          e?.response?.body || e
+        );
       }
 
       // 2) Deal
@@ -373,7 +418,10 @@ export async function registerRoutes(
         updatedCompany = true;
         updates.push("company");
       } catch (e: any) {
-        console.error("Failed to update company bad_debt:", e?.response?.body || e);
+        console.error(
+          "Failed to update company bad_debt:",
+          e?.response?.body || e
+        );
       }
 
       return res.status(200).json({
@@ -419,17 +467,13 @@ export async function registerRoutes(
           "bad_debt",
         ]);
 
-      const dealsResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
-        "companies",
-        companyId,
-        "deals"
-      );
+      const dealsResponse = await (
+        hubspotClient.crm.associations.v4.basicApi as any
+      ).getPage("companies", companyId, "deals");
 
-      const invoicesResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
-        "companies",
-        companyId,
-        "invoices"
-      );
+      const invoicesResponse = await (
+        hubspotClient.crm.associations.v4.basicApi as any
+      ).getPage("companies", companyId, "invoices");
 
       const deals: any[] = [];
       for (const assoc of dealsResponse.results || []) {
@@ -480,18 +524,20 @@ export async function registerRoutes(
           let dealName: string | null = null;
 
           try {
-            const invoiceDealAssoc = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
-              "invoices",
-              assoc.id,
-              "deals"
-            );
+            const invoiceDealAssoc = await (
+              hubspotClient.crm.associations.v4.basicApi as any
+            ).getPage("invoices", assoc.id, "deals");
+
             if (invoiceDealAssoc.results?.length) {
               dealId = invoiceDealAssoc.results[0].id;
-              dealName = dealId ? (dealMap.get(dealId) || null) : null;
+              dealName = dealId ? dealMap.get(dealId) || null : null;
 
               if (!dealName && dealId) {
                 try {
-                  const dealInfo = await hubspotClient.crm.deals.basicApi.getById(dealId, ["dealname"]);
+                  const dealInfo = await hubspotClient.crm.deals.basicApi.getById(
+                    dealId,
+                    ["dealname"]
+                  );
                   dealName = dealInfo.properties.dealname || null;
                 } catch (e) {
                   console.error(`Failed to fetch deal name for ${dealId}:`, e);

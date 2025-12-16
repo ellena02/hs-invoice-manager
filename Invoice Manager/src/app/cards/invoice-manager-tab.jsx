@@ -6,27 +6,33 @@ import {
   Button,
 } from "@hubspot/ui-extensions";
 
-hubspot.extend(({ context, actions }) => (
-  <Flex direction="column" gap="md">
-    <Text format={{ fontWeight: "bold" }}>
-      Invoice Manager (Company Tab)
-    </Text>
+hubspot.extend(({ context, actions }) => {
+  const companyId = context?.crm?.objectId;
 
-    <Text>
-      Company ID: {context?.crm?.objectId ?? "N/A"}
-    </Text>
+  return (
+    <Flex direction="column" gap="md">
+      <Text format={{ fontWeight: "bold" }}>
+        Invoice Manager
+      </Text>
 
-    <Button
-      onClick={() =>
-        actions.openIframeModal({
-          uri: "https://hs-invoice-manager.onrender.com/",
-          title: "Invoice Manager",
-          width: 1200,
-          height: 800,
-        })
-      }
-    >
-      Open Invoice Manager
-    </Button>
-  </Flex>
-));
+      <Text>
+        Company ID: {companyId ?? "N/A"}
+      </Text>
+
+      <Button
+        disabled={!companyId}
+        onClick={() =>
+          actions.openIframeModal({
+            // ✅ PASS companyId INTO THE IFRAME URL
+            uri: `https://hs-invoice-manager.onrender.com/?companyId=${companyId}`,
+            title: "Invoice Manager",
+            width: 1200,
+            height: 800,
+          })
+        }
+      >
+        Open Invoice Manager
+      </Button>
+    </Flex>
+  );
+});

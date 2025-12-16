@@ -16,23 +16,26 @@ declare module "http" {
 /**
  * IMPORTANT for Render/HubSpot iframe cookies:
  * - trust proxy so secure cookies work behind proxy
- * - SameSite=None + Secure in production so cookies work in iframes
+ * - SameSite=None + Secure so cookies work in iframes
  */
 app.set("trust proxy", 1);
 
+// ✅ Always set iframe-compatible cookie. Render is https, HubSpot loads you in an iframe.
+// (Even if NODE_ENV isn't "production" globally, we still need Secure+None on Render.)
 app.use(
   session({
     name: "im.sid",
     secret: process.env.SESSION_SECRET || "dev-only-secret-change-me",
     resave: false,
     saveUninitialized: false,
+    proxy: true,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: true,
+      sameSite: "none",
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
-  }),
+  })
 );
 
 app.use(
@@ -40,7 +43,7 @@ app.use(
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
-  }),
+  })
 );
 
 app.use(express.urlencoded({ extended: false }));
@@ -92,7 +95,9 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  if (process.env.NODE_ENV === "production") {
+  // ✅ Static assets should be served on Render
+  // Render sets process.env.RENDER="true"
+  if (process.env.RENDER === "true" || process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");
@@ -108,6 +113,6 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
-    },
+    }
   );
 })();

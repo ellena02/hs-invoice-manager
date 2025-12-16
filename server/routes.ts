@@ -1,14 +1,17 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { Client as HubSpotClient } from "@hubspot/api-client";
 import { markBadDebtRequestSchema, archiveOverdueInvoicesRequestSchema } from "@shared/schema";
+import { storage } from "./storage";
 
+// OAuth Configuration
+const HUBSPOT_CLIENT_ID = process.env.HUBSPOT_CLIENT_ID;
+const HUBSPOT_CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
+const HUBSPOT_REDIRECT_URI = process.env.HUBSPOT_REDIRECT_URI || "http://localhost:5000/auth/hubspot/callback";
+const HUBSPOT_SCOPES = "crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.invoices.read crm.objects.invoices.write";
+
+// For backwards compatibility - private app token (optional)
 const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
-
-let hubspotClient: HubSpotClient | null = null;
-if (HS_PRIVATE_APP_TOKEN) {
-  hubspotClient = new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
-}
 
 // Mock state for demo mode (persists during session)
 const mockState = {
@@ -16,16 +19,183 @@ const mockState = {
   deletedInvoiceIds: new Set<string>()
 };
 
+// Helper to get HubSpot client for a portal
+async function getHubSpotClient(portalId?: string): Promise<HubSpotClient | null> {
+  // First try OAuth token if portalId provided
+  if (portalId) {
+    const token = await storage.getToken(portalId);
+    if (token) {
+      // Check if token needs refresh
+      const now = Math.floor(Date.now() / 1000);
+      if (token.expiresAt <= now + 60) {
+        // Token expired or expiring soon - refresh it
+        const refreshedToken = await refreshAccessToken(token.refreshToken, portalId);
+        if (refreshedToken) {
+          return new HubSpotClient({ accessToken: refreshedToken.accessToken });
+        }
+      } else {
+        return new HubSpotClient({ accessToken: token.accessToken });
+      }
+    }
+  }
+
+  // Fallback to private app token if available
+  if (HS_PRIVATE_APP_TOKEN) {
+    return new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
+  }
+
+  return null;
+}
+
+// Refresh access token using refresh token
+async function refreshAccessToken(refreshToken: string, portalId: string) {
+  if (!HUBSPOT_CLIENT_ID || !HUBSPOT_CLIENT_SECRET) {
+    console.error("OAuth credentials not configured for token refresh");
+    return null;
+  }
+
+  try {
+    const hubspotClient = new HubSpotClient();
+    const result = await hubspotClient.oauth.tokensApi.create(
+      "refresh_token",
+      undefined,
+      undefined,
+      HUBSPOT_CLIENT_ID,
+      HUBSPOT_CLIENT_SECRET,
+      refreshToken
+    );
+
+    const newToken = {
+      portalId,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken || refreshToken,
+      expiresAt: Math.floor(Date.now() / 1000) + result.expiresIn,
+    };
+
+    await storage.saveToken(newToken);
+    return newToken;
+  } catch (error) {
+    console.error("Failed to refresh token:", error);
+    await storage.deleteToken(portalId);
+    return null;
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
 
+  // OAuth: Start authorization flow
+  app.get("/auth/hubspot", (_req: Request, res: Response) => {
+    if (!HUBSPOT_CLIENT_ID) {
+      return res.status(500).json({ 
+        error: "OAuth not configured. Set HUBSPOT_CLIENT_ID environment variable." 
+      });
+    }
+
+    const authUrl = new URL("https://app.hubspot.com/oauth/authorize");
+    authUrl.searchParams.set("client_id", HUBSPOT_CLIENT_ID);
+    authUrl.searchParams.set("redirect_uri", HUBSPOT_REDIRECT_URI);
+    authUrl.searchParams.set("scope", HUBSPOT_SCOPES);
+    
+    res.redirect(authUrl.toString());
+  });
+
+  // OAuth: Handle callback
+  app.get("/auth/hubspot/callback", async (req: Request, res: Response) => {
+    const { code, error, error_description } = req.query;
+
+    if (error) {
+      return res.status(400).json({ 
+        error: error as string, 
+        description: error_description as string 
+      });
+    }
+
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ error: "Missing authorization code" });
+    }
+
+    if (!HUBSPOT_CLIENT_ID || !HUBSPOT_CLIENT_SECRET) {
+      return res.status(500).json({ 
+        error: "OAuth not configured. Set HUBSPOT_CLIENT_ID and HUBSPOT_CLIENT_SECRET." 
+      });
+    }
+
+    try {
+      const hubspotClient = new HubSpotClient();
+      const tokenResult = await hubspotClient.oauth.tokensApi.create(
+        "authorization_code",
+        code,
+        HUBSPOT_REDIRECT_URI,
+        HUBSPOT_CLIENT_ID,
+        HUBSPOT_CLIENT_SECRET
+      );
+
+      // Get portal ID from access token info
+      hubspotClient.setAccessToken(tokenResult.accessToken);
+      const tokenInfo = await hubspotClient.oauth.accessTokensApi.get(tokenResult.accessToken);
+      const portalId = tokenInfo.hubId?.toString() || "unknown";
+
+      // Save token
+      await storage.saveToken({
+        portalId,
+        accessToken: tokenResult.accessToken,
+        refreshToken: tokenResult.refreshToken,
+        expiresAt: Math.floor(Date.now() / 1000) + tokenResult.expiresIn,
+      });
+
+      // Redirect to app with portal ID
+      res.redirect(`/?portalId=${portalId}&connected=true`);
+    } catch (error: any) {
+      console.error("OAuth callback error:", error?.response?.body || error);
+      res.status(500).json({
+        error: "Failed to exchange authorization code",
+        details: error?.response?.body?.message || error?.message
+      });
+    }
+  });
+
+  // Check OAuth status
+  app.get("/auth/status", async (req: Request, res: Response) => {
+    const portalId = req.query.portalId as string;
+    
+    if (portalId) {
+      const token = await storage.getToken(portalId);
+      if (token) {
+        const now = Math.floor(Date.now() / 1000);
+        return res.json({
+          connected: true,
+          portalId,
+          expiresIn: token.expiresAt - now,
+          oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET)
+        });
+      }
+    }
+
+    res.json({
+      connected: !!HS_PRIVATE_APP_TOKEN,
+      privateAppMode: !!HS_PRIVATE_APP_TOKEN,
+      oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET)
+    });
+  });
+
+  // Disconnect/logout
+  app.post("/auth/disconnect", async (req: Request, res: Response) => {
+    const portalId = req.query.portalId as string;
+    if (portalId) {
+      await storage.deleteToken(portalId);
+    }
+    res.json({ success: true });
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ 
       ok: true, 
       timestamp: new Date().toISOString(),
-      hubspotConnected: !!hubspotClient 
+      oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET),
+      privateAppConfigured: !!HS_PRIVATE_APP_TOKEN
     });
   });
 
@@ -41,18 +211,20 @@ export async function registerRoutes(
       }
 
       const { companyId, badDebt } = parseResult.data;
+      const portalId = req.query.portalId as string;
 
       const isChecked =
         badDebt === true || badDebt === "true" || badDebt === 1 || badDebt === "1";
 
       const newValue = isChecked ? "true" : "false";
 
+      const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         console.warn("HubSpot client not configured - returning mock response");
         return res.status(200).json({ 
           success: true, 
           bad_debt: newValue,
-          message: "Mock response - HubSpot token not configured"
+          message: "Mock response - HubSpot not connected"
         });
       }
 
@@ -75,7 +247,9 @@ export async function registerRoutes(
   app.post("/api/company/:companyId/invoice/:invoiceId/archive", async (req, res) => {
     try {
       const { companyId, invoiceId } = req.params;
+      const portalId = req.query.portalId as string;
 
+      const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         // Mock mode
         mockState.deletedInvoiceIds.add(invoiceId);
@@ -84,35 +258,33 @@ export async function registerRoutes(
         return res.status(200).json({
           success: true,
           invoiceId,
-          message: "Mock response - Invoice archived and company marked as bad debt."
+          invoiceNumber: `INV-MOCK-${invoiceId}`,
+          message: "Mock response - Invoice archived and company marked as bad debt"
         });
       }
 
       // Get invoice details first
-      const invoice = await hubspotClient.crm.objects.basicApi.getById(
-        "invoices",
-        invoiceId,
-        ["hs_invoice_number", "hs_invoice_status", "hs_collection_status", "hs_payment_status", "hs_amount_paid"]
-      );
-
-      const invoiceStatus = invoice.properties.hs_invoice_status?.toLowerCase() || "";
-      const collectionStatus = invoice.properties.hs_collection_status?.toLowerCase() || "";
-      const paymentStatus = invoice.properties.hs_payment_status?.toLowerCase() || "";
-      const amountPaid = parseFloat(invoice.properties.hs_amount_paid || "0");
-
-      // Verify invoice is overdue and not paid
-      const isOverdue = collectionStatus === "overdue" || invoiceStatus === "overdue";
-      const isPaid = invoiceStatus === "paid" || paymentStatus === "paid" || amountPaid > 0;
-
-      if (!isOverdue || isPaid) {
-        return res.status(400).json({
-          success: false,
-          message: "Invoice must be overdue and not paid to mark as bad debt."
-        });
+      let invoiceNumber = "";
+      try {
+        const invoice = await hubspotClient.crm.objects.basicApi.getById(
+          "invoices",
+          invoiceId,
+          ["hs_invoice_number"]
+        );
+        invoiceNumber = invoice.properties.hs_invoice_number || invoiceId;
+      } catch (e) {
+        invoiceNumber = invoiceId;
       }
 
-      // Archive the invoice
-      await hubspotClient.crm.objects.basicApi.archive("invoices", invoiceId);
+      // Archive the invoice (move to recycle bin)
+      try {
+        await hubspotClient.crm.objects.basicApi.archive("invoices", invoiceId);
+      } catch (archiveError: any) {
+        return res.status(400).json({
+          success: false,
+          message: archiveError?.response?.body?.message || "Failed to archive invoice"
+        });
+      }
 
       // Mark company as bad debt
       await hubspotClient.crm.companies.basicApi.update(companyId, {
@@ -122,26 +294,27 @@ export async function registerRoutes(
       return res.status(200).json({
         success: true,
         invoiceId,
-        invoiceNumber: invoice.properties.hs_invoice_number,
-        message: `Invoice ${invoice.properties.hs_invoice_number} archived and company marked as bad debt.`
+        invoiceNumber,
+        message: `Invoice ${invoiceNumber} archived and company marked as bad debt`
       });
     } catch (error: any) {
-      console.error("Archive single invoice error:", error?.response?.body || error);
+      console.error("Archive invoice error:", error?.response?.body || error);
       return res.status(500).json({
         success: false,
-        message: error?.response?.body?.message || error?.message || "Failed to archive invoice."
+        message: error?.response?.body?.message || error?.message || "Failed to archive invoice"
       });
     }
   });
 
+  // Archive all overdue invoices for a company
   app.post("/api/company/:companyId/archive-overdue-invoices", async (req, res) => {
     try {
       const { companyId } = req.params;
+      const portalId = req.query.portalId as string;
 
+      const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         // Mock mode: simulate archiving overdue invoices
-        // HubSpot statuses: draft, open, paid, voided
-        // Overdue = status is "open" AND due_date < today
         const allMockInvoices = [
           { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15" },
           { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15" },
@@ -179,31 +352,28 @@ export async function registerRoutes(
         "invoices"
       );
 
-      // Filter invoices: must be OVERDUE and NOT PAID
-      const overdueUnpaidInvoices: { id: string; number: string }[] = [];
-      
+      const overdueInvoices: { id: string; number: string }[] = [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       for (const assoc of invoicesResponse.results || []) {
         try {
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
             "invoices",
             assoc.id,
-            ["hs_invoice_number", "hs_invoice_status", "hs_collection_status", "hs_payment_status", "hs_amount_paid"]
+            ["hs_invoice_number", "hs_invoice_status", "hs_due_date"]
           );
+          const status = invoice.properties.hs_invoice_status?.toLowerCase() || "";
+          const dueDate = invoice.properties.hs_due_date;
           
-          const invoiceStatus = invoice.properties.hs_invoice_status?.toLowerCase() || "";
-          const collectionStatus = invoice.properties.hs_collection_status?.toLowerCase() || "";
-          const paymentStatus = invoice.properties.hs_payment_status?.toLowerCase() || "";
-          const amountPaid = parseFloat(invoice.properties.hs_amount_paid || "0");
-          
-          // Check if invoice is overdue (collection status OR invoice status) AND not paid
-          const isOverdue = collectionStatus === "overdue" || invoiceStatus === "overdue";
-          const isPaid = invoiceStatus === "paid" || paymentStatus === "paid" || amountPaid > 0;
-          
-          if (isOverdue && !isPaid) {
-            overdueUnpaidInvoices.push({
-              id: invoice.id,
-              number: invoice.properties.hs_invoice_number || invoice.id
-            });
+          if (status === "open" && dueDate) {
+            const dueDateObj = new Date(dueDate);
+            if (dueDateObj < today) {
+              overdueInvoices.push({
+                id: invoice.id,
+                number: invoice.properties.hs_invoice_number || invoice.id
+              });
+            }
           }
         } catch (e) {
           console.error(`Failed to fetch invoice ${assoc.id}:`, e);
@@ -212,25 +382,24 @@ export async function registerRoutes(
 
       const archivedInvoices: string[] = [];
       const failedInvoices: { number: string; reason: string }[] = [];
-      
-      for (const invoice of overdueUnpaidInvoices) {
+
+      for (const invoice of overdueInvoices) {
         try {
-          // Archive the invoice - this works for all invoice statuses
           await hubspotClient.crm.objects.basicApi.archive("invoices", invoice.id);
           archivedInvoices.push(invoice.number);
         } catch (e: any) {
-          console.error(`Failed to archive invoice ${invoice.id}:`, e);
           failedInvoices.push({
             number: invoice.number,
-            reason: e?.response?.body?.message || e.message || "Unknown error"
+            reason: e?.response?.body?.message || "Archive failed"
           });
         }
       }
 
-      // Mark company as bad debt
-      await hubspotClient.crm.companies.basicApi.update(companyId, {
-        properties: { bad_debt: "true" },
-      });
+      if (archivedInvoices.length > 0 || overdueInvoices.length > 0) {
+        await hubspotClient.crm.companies.basicApi.update(companyId, {
+          properties: { bad_debt: "true" },
+        });
+      }
 
       let message = `Company marked as bad debt. `;
       if (archivedInvoices.length > 0) {
@@ -262,15 +431,15 @@ export async function registerRoutes(
   app.get("/api/company/:companyId", async (req, res) => {
     try {
       const { companyId } = req.params;
+      const portalId = req.query.portalId as string;
 
+      const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         const mockDeals = [
           { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15" },
           { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
           { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
         ];
-        // HubSpot invoice statuses: draft, open, paid, voided
-        // Overdue is calculated: status is "open" AND due_date < today
         const allMockInvoices = [
           { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License" },
           { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package" },
@@ -279,10 +448,8 @@ export async function registerRoutes(
           { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package" },
           { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services" },
         ];
-        // Filter out archived invoices
         const mockInvoices = allMockInvoices.filter(inv => !mockState.deletedInvoiceIds.has(inv.id));
         
-        // Calculate overdue: status is "open" AND due_date < today
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const overdueCount = mockInvoices.filter(inv => {
@@ -300,7 +467,7 @@ export async function registerRoutes(
           deals: mockDeals,
           invoices: mockInvoices,
           overdueCount,
-          message: "Mock data - HubSpot token not configured"
+          message: "Mock data - HubSpot not connected"
         });
       }
 
@@ -340,7 +507,6 @@ export async function registerRoutes(
         }
       }
 
-      // Create a map of deal IDs to deal names for quick lookup
       const dealMap = new Map<string, string>();
       for (const deal of deals) {
         dealMap.set(deal.id, deal.dealname);
@@ -361,7 +527,6 @@ export async function registerRoutes(
           const status = invoice.properties.hs_invoice_status || "";
           const dueDate = invoice.properties.hs_due_date || null;
           
-          // Calculate overdue: status is "open" AND due_date < today
           if (status.toLowerCase() === "open" && dueDate) {
             const dueDateObj = new Date(dueDate);
             if (dueDateObj < today) {
@@ -369,7 +534,6 @@ export async function registerRoutes(
             }
           }
 
-          // Try to get deal association for this invoice
           let dealId: string | null = null;
           let dealName: string | null = null;
           try {
@@ -381,7 +545,6 @@ export async function registerRoutes(
             if (invoiceDealAssoc.results && invoiceDealAssoc.results.length > 0) {
               dealId = invoiceDealAssoc.results[0].id;
               dealName = dealMap.get(dealId) || null;
-              // If deal not in our map, fetch it
               if (!dealName && dealId) {
                 try {
                   const dealInfo = await hubspotClient.crm.deals.basicApi.getById(dealId, ["dealname"]);

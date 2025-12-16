@@ -1,76 +1,73 @@
 import type { Express, Request, Response } from "express";
-import { createServer, type Server } from "http";
+import type { Server } from "http";
 import { Client as HubSpotClient } from "@hubspot/api-client";
-import { markBadDebtRequestSchema, markInvoiceBadDebtRequestSchema } from "@shared/schema";
+import "express-session";
+
+import {
+  markBadDebtRequestSchema,
+  markInvoiceBadDebtRequestSchema,
+} from "@shared/schema";
 import { storage } from "./storage";
+
+/**
+ * Extend express-session typing so TypeScript knows about portalId in session.
+ */
+declare module "express-session" {
+  interface SessionData {
+    portalId?: string;
+  }
+}
 
 // OAuth Configuration
 const HUBSPOT_CLIENT_ID = process.env.HUBSPOT_CLIENT_ID;
 const HUBSPOT_CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
-const HUBSPOT_REDIRECT_URI = process.env.HUBSPOT_REDIRECT_URI || "http://localhost:5000/auth/hubspot/callback";
-const HUBSPOT_SCOPES ="oauth crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write crm.objects.invoices.read crm.objects.invoices.write";
+const HUBSPOT_REDIRECT_URI =
+  process.env.HUBSPOT_REDIRECT_URI ||
+  "http://localhost:5000/auth/hubspot/callback";
 
-  // For backwards compatibility - private app token (optional)
+const HUBSPOT_SCOPES =
+  "oauth crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write crm.objects.invoices.read crm.objects.invoices.write";
 
+// Optional: private app token fallback (if you still want it)
 const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
-// Mock state for demo mode (persists during session)
-const mockState = {
-  badDebt: false,
-  invoiceBadDebt: new Set<string>(),
-  dealBadDebt: new Set<string>()
-};
-
-// OAuth state storage for CSRF protection (in production, use session or Redis)
+// OAuth state storage for CSRF protection (in production, consider session/Redis)
 const oauthStates = new Map<string, { createdAt: number }>();
 
-// Clean up expired states (older than 10 minutes)
 function cleanupOAuthStates() {
   const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
-  const entries = Array.from(oauthStates.entries());
-  for (const [state, data] of entries) {
-    if (data.createdAt < tenMinutesAgo) {
-      oauthStates.delete(state);
-    }
+  const keysToDelete: string[] = [];
+
+  oauthStates.forEach((data, state) => {
+    if (data.createdAt < tenMinutesAgo) keysToDelete.push(state);
+  });
+
+  for (let i = 0; i < keysToDelete.length; i++) {
+    oauthStates.delete(keysToDelete[i]);
   }
 }
-
-// Generate random state for OAuth CSRF protection
 function generateOAuthState(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let state = '';
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let state = "";
   for (let i = 0; i < 32; i++) {
     state += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return state;
 }
 
-// Helper to get HubSpot client for a portal
-async function getHubSpotClient(portalId?: string): Promise<HubSpotClient | null> {
-  // First try OAuth token if portalId provided
-  if (portalId) {
-    const token = await storage.getToken(portalId);
-    if (token) {
-      // Check if token needs refresh
-      const now = Math.floor(Date.now() / 1000);
-      if (token.expiresAt <= now + 60) {
-        // Token expired or expiring soon - refresh it
-        const refreshedToken = await refreshAccessToken(token.refreshToken, portalId);
-        if (refreshedToken) {
-          return new HubSpotClient({ accessToken: refreshedToken.accessToken });
-        }
-      } else {
-        return new HubSpotClient({ accessToken: token.accessToken });
-      }
-    }
-  }
+/**
+ * Prefer portalId from session; allow fallback to query for backwards compatibility.
+ */
+function getPortalId(req: Request): string | undefined {
+  return req.session?.portalId || (req.query.portalId as string | undefined);
+}
 
-  // Fallback to private app token if available
-  if (HS_PRIVATE_APP_TOKEN) {
-    return new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
-  }
-
-  return null;
+function notConnected(res: Response) {
+  return res.status(401).json({
+    success: false,
+    message: "Not connected to HubSpot. Please connect the app.",
+  });
 }
 
 // Refresh access token using refresh token
@@ -107,20 +104,42 @@ async function refreshAccessToken(refreshToken: string, portalId: string) {
   }
 }
 
+// Helper to get HubSpot client for a portal (OAuth first, optional private token fallback)
+async function getHubSpotClient(portalId?: string): Promise<HubSpotClient | null> {
+  if (portalId) {
+    const token = await storage.getToken(portalId);
+    if (token) {
+      const now = Math.floor(Date.now() / 1000);
+      if (token.expiresAt <= now + 60) {
+        const refreshed = await refreshAccessToken(token.refreshToken, portalId);
+        if (!refreshed) return null;
+        return new HubSpotClient({ accessToken: refreshed.accessToken });
+      }
+      return new HubSpotClient({ accessToken: token.accessToken });
+    }
+  }
+
+  if (HS_PRIVATE_APP_TOKEN) {
+    return new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
+  }
+
+  return null;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-
-  // OAuth: Start authorization flow
+  /**
+   * OAuth: Start authorization flow
+   */
   app.get("/auth/hubspot", (_req: Request, res: Response) => {
     if (!HUBSPOT_CLIENT_ID) {
-      return res.status(500).json({ 
-        error: "OAuth not configured. Set HUBSPOT_CLIENT_ID environment variable." 
+      return res.status(500).json({
+        error: "OAuth not configured. Set HUBSPOT_CLIENT_ID env var.",
       });
     }
 
-    // Clean up old states and generate new one for CSRF protection
     cleanupOAuthStates();
     const state = generateOAuthState();
     oauthStates.set(state, { createdAt: Date.now() });
@@ -130,34 +149,38 @@ export async function registerRoutes(
     authUrl.searchParams.set("redirect_uri", HUBSPOT_REDIRECT_URI);
     authUrl.searchParams.set("scope", HUBSPOT_SCOPES);
     authUrl.searchParams.set("state", state);
-    
+
     res.redirect(authUrl.toString());
   });
 
-  // OAuth: Handle callback
+  /**
+   * OAuth: Handle callback
+   */
   app.get("/auth/hubspot/callback", async (req: Request, res: Response) => {
     const { code, error, error_description, state } = req.query;
 
     if (error) {
-      return res.status(400).json({ 
-        error: error as string, 
-        description: error_description as string 
+      return res.status(400).json({
+        error: error as string,
+        description: error_description as string,
       });
     }
 
-    // Verify state parameter for CSRF protection
     if (!state || typeof state !== "string" || !oauthStates.has(state)) {
-      return res.status(400).json({ error: "Invalid or missing state parameter" });
+      return res
+        .status(400)
+        .json({ error: "Invalid or missing state parameter" });
     }
-    oauthStates.delete(state); // State used, remove it
+    oauthStates.delete(state);
 
     if (!code || typeof code !== "string") {
       return res.status(400).json({ error: "Missing authorization code" });
     }
 
     if (!HUBSPOT_CLIENT_ID || !HUBSPOT_CLIENT_SECRET) {
-      return res.status(500).json({ 
-        error: "OAuth not configured. Set HUBSPOT_CLIENT_ID and HUBSPOT_CLIENT_SECRET." 
+      return res.status(500).json({
+        error:
+          "OAuth not configured. Set HUBSPOT_CLIENT_ID and HUBSPOT_CLIENT_SECRET.",
       });
     }
 
@@ -173,10 +196,15 @@ export async function registerRoutes(
 
       // Get portal ID from access token info
       hubspotClient.setAccessToken(tokenResult.accessToken);
-      const tokenInfo = await hubspotClient.oauth.accessTokensApi.get(tokenResult.accessToken);
-      const portalId = tokenInfo.hubId?.toString() || "unknown";
+      const tokenInfo = await hubspotClient.oauth.accessTokensApi.get(
+        tokenResult.accessToken
+      );
+      const portalId = tokenInfo.hubId?.toString();
 
-      // Save token
+      if (!portalId) {
+        return res.status(500).json({ error: "Could not resolve portalId (hubId)" });
+      }
+
       await storage.saveToken({
         portalId,
         accessToken: tokenResult.accessToken,
@@ -184,21 +212,26 @@ export async function registerRoutes(
         expiresAt: Math.floor(Date.now() / 1000) + tokenResult.expiresIn,
       });
 
-      // Redirect to app with portal ID
-      res.redirect(`/?portalId=${portalId}&connected=true`);
-    } catch (error: any) {
-      console.error("OAuth callback error:", error?.response?.body || error);
+      // ✅ Save portalId into session so your modal/backend calls work without query params
+      req.session.portalId = portalId;
+
+      // Redirect back to your app (no portalId needed in URL)
+      res.redirect(`/?connected=true`);
+    } catch (err: any) {
+      console.error("OAuth callback error:", err?.response?.body || err);
       res.status(500).json({
         error: "Failed to exchange authorization code",
-        details: error?.response?.body?.message || error?.message
+        details: err?.response?.body?.message || err?.message,
       });
     }
   });
 
-  // Check OAuth status
+  /**
+   * Check OAuth status
+   */
   app.get("/auth/status", async (req: Request, res: Response) => {
-    const portalId = req.query.portalId as string;
-    
+    const portalId = getPortalId(req);
+
     if (portalId) {
       const token = await storage.getToken(portalId);
       if (token) {
@@ -207,220 +240,184 @@ export async function registerRoutes(
           connected: true,
           portalId,
           expiresIn: token.expiresAt - now,
-          oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET)
+          oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET),
         });
       }
     }
 
-    res.json({
-      connected: !!HS_PRIVATE_APP_TOKEN,
+    return res.json({
+      connected: false,
+      oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET),
       privateAppMode: !!HS_PRIVATE_APP_TOKEN,
-      oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET)
     });
   });
 
-  // Disconnect/logout
+  /**
+   * Disconnect/logout
+   */
   app.post("/auth/disconnect", async (req: Request, res: Response) => {
-    const portalId = req.query.portalId as string;
-    if (portalId) {
-      await storage.deleteToken(portalId);
-    }
+    const portalId = getPortalId(req);
+    if (portalId) await storage.deleteToken(portalId);
+
+    req.session.portalId = undefined;
     res.json({ success: true });
   });
 
+  /**
+   * Health
+   */
   app.get("/api/health", (_req, res) => {
-    res.json({ 
-      ok: true, 
+    res.json({
+      ok: true,
       timestamp: new Date().toISOString(),
       oauthConfigured: !!(HUBSPOT_CLIENT_ID && HUBSPOT_CLIENT_SECRET),
-      privateAppConfigured: !!HS_PRIVATE_APP_TOKEN
+      privateAppConfigured: !!HS_PRIVATE_APP_TOKEN,
     });
   });
 
+  /**
+   * Mark company bad debt
+   */
   app.post("/api/mark-bad-debt", async (req, res) => {
     try {
       const parseResult = markBadDebtRequestSchema.safeParse(req.body);
-      
       if (!parseResult.success) {
-        return res.status(400).json({ 
-          success: false, 
-          message: parseResult.error.errors[0]?.message || "Invalid request body" 
+        return res.status(400).json({
+          success: false,
+          message:
+            parseResult.error.errors[0]?.message || "Invalid request body",
         });
       }
 
       const { companyId, badDebt } = parseResult.data;
-      const portalId = req.query.portalId as string;
+      const portalId = getPortalId(req);
+
+      const hubspotClient = await getHubSpotClient(portalId);
+      if (!hubspotClient) return notConnected(res);
 
       const isChecked =
         badDebt === true || badDebt === "true" || badDebt === 1 || badDebt === "1";
-
       const newValue = isChecked ? "true" : "false";
-
-      const hubspotClient = await getHubSpotClient(portalId);
-      if (!hubspotClient) {
-        console.warn("HubSpot client not configured - returning mock response");
-        mockState.badDebt = isChecked;
-        return res.status(200).json({ 
-          success: true, 
-          bad_debt: newValue,
-          message: "Mock response - HubSpot not connected"
-        });
-      }
 
       await hubspotClient.crm.companies.basicApi.update(companyId, {
         properties: { bad_debt: newValue },
       });
 
       return res.status(200).json({ success: true, bad_debt: newValue });
-    } catch (error: any) {
-      console.error("Backend mark-bad-debt error:", error?.response?.body || error);
+    } catch (err: any) {
+      console.error("Backend mark-bad-debt error:", err?.response?.body || err);
       return res.status(500).json({
         success: false,
         message:
-          error?.response?.body?.message || error?.message || "Unexpected backend error.",
+          err?.response?.body?.message ||
+          err?.message ||
+          "Unexpected backend error.",
       });
     }
   });
 
-  // Mark bad debt on specific invoice (cascades to deal and company)
+  /**
+   * Mark bad debt on specific invoice (cascades to deal and company)
+   */
   app.post("/api/mark-invoice-bad-debt", async (req, res) => {
     try {
       const parseResult = markInvoiceBadDebtRequestSchema.safeParse(req.body);
-      
       if (!parseResult.success) {
-        return res.status(400).json({ 
-          success: false, 
-          message: parseResult.error.errors[0]?.message || "Invalid request body" 
+        return res.status(400).json({
+          success: false,
+          message:
+            parseResult.error.errors[0]?.message || "Invalid request body",
         });
       }
 
       const { companyId, invoiceId, dealId } = parseResult.data;
-      const portalId = req.query.portalId as string;
+      const portalId = getPortalId(req);
 
       const hubspotClient = await getHubSpotClient(portalId);
-      if (!hubspotClient) {
-        console.warn("HubSpot client not configured - returning mock response");
-        mockState.badDebt = true;
-        mockState.invoiceBadDebt.add(invoiceId);
-        if (dealId) {
-          mockState.dealBadDebt.add(dealId);
-        }
-        return res.status(200).json({ 
-          success: true, 
-          bad_debt: "true",
-          updatedInvoice: true,
-          updatedDeal: !!dealId,
-          updatedCompany: true,
-          message: "Mock response - Marked bad debt on invoice, deal, and company"
-        });
-      }
+      if (!hubspotClient) return notConnected(res);
 
+      const updates: string[] = [];
       let updatedInvoice = false;
       let updatedDeal = false;
       let updatedCompany = false;
 
-      // 1. Update invoice bad_debt property
+      // 1) Invoice
       try {
         await hubspotClient.crm.objects.basicApi.update("invoices", invoiceId, {
-          properties: { bad_debt: "true" }
+          properties: { bad_debt: "true" },
         });
         updatedInvoice = true;
+        updates.push("invoice");
       } catch (e: any) {
         console.error("Failed to update invoice bad_debt:", e?.response?.body || e);
       }
 
-      // 2. Update deal bad_debt property (if dealId provided)
+      // 2) Deal
       if (dealId) {
         try {
           await hubspotClient.crm.deals.basicApi.update(dealId, {
-            properties: { bad_debt: "true" }
+            properties: { bad_debt: "true" },
           });
           updatedDeal = true;
+          updates.push("deal");
         } catch (e: any) {
           console.error("Failed to update deal bad_debt:", e?.response?.body || e);
         }
       }
 
-      // 3. Update company bad_debt property
+      // 3) Company
       try {
         await hubspotClient.crm.companies.basicApi.update(companyId, {
-          properties: { bad_debt: "true" }
+          properties: { bad_debt: "true" },
         });
         updatedCompany = true;
+        updates.push("company");
       } catch (e: any) {
         console.error("Failed to update company bad_debt:", e?.response?.body || e);
       }
 
-      const updates = [];
-      if (updatedInvoice) updates.push("invoice");
-      if (updatedDeal) updates.push("deal");
-      if (updatedCompany) updates.push("company");
-
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         bad_debt: "true",
         updatedInvoice,
         updatedDeal,
         updatedCompany,
-        message: updates.length > 0 
-          ? `Marked bad debt on: ${updates.join(", ")}`
-          : "No records were updated"
+        message:
+          updates.length > 0
+            ? `Marked bad debt on: ${updates.join(", ")}`
+            : "No records were updated",
       });
-    } catch (error: any) {
-      console.error("Backend mark-invoice-bad-debt error:", error?.response?.body || error);
+    } catch (err: any) {
+      console.error(
+        "Backend mark-invoice-bad-debt error:",
+        err?.response?.body || err
+      );
       return res.status(500).json({
         success: false,
-        message: error?.response?.body?.message || error?.message || "Unexpected backend error.",
+        message:
+          err?.response?.body?.message ||
+          err?.message ||
+          "Unexpected backend error.",
       });
     }
   });
 
+  /**
+   * Get company + associated deals/invoices summary (real data only)
+   */
   app.get("/api/company/:companyId", async (req, res) => {
     try {
       const { companyId } = req.params;
-      const portalId = req.query.portalId as string;
+      const portalId = getPortalId(req);
 
       const hubspotClient = await getHubSpotClient(portalId);
-      if (!hubspotClient) {
-        const mockDeals = [
-          { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15", bad_debt: mockState.dealBadDebt.has("1") ? "true" : null },
-          { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20", bad_debt: mockState.dealBadDebt.has("2") ? "true" : null },
-          { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10", bad_debt: mockState.dealBadDebt.has("3") ? "true" : null },
-        ];
-        const mockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License", bad_debt: mockState.invoiceBadDebt.has("101") ? "true" : null },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package", bad_debt: mockState.invoiceBadDebt.has("102") ? "true" : null },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01", amount: "10000", dealId: "3", dealName: "Training Services", bad_debt: mockState.invoiceBadDebt.has("103") ? "true" : null },
-          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20", amount: "5000", dealId: "1", dealName: "Enterprise License", bad_debt: mockState.invoiceBadDebt.has("104") ? "true" : null },
-          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package", bad_debt: mockState.invoiceBadDebt.has("105") ? "true" : null },
-          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services", bad_debt: mockState.invoiceBadDebt.has("106") ? "true" : null },
-        ];
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const overdueCount = mockInvoices.filter(inv => {
-          if (inv.hs_invoice_status !== "open" || !inv.hs_due_date) return false;
-          const dueDate = new Date(inv.hs_due_date);
-          return dueDate < today;
-        }).length;
-        
-        return res.status(200).json({
-          company: {
-            id: companyId,
-            name: "Demo Company",
-            bad_debt: mockState.badDebt ? "true" : "false"
-          },
-          deals: mockDeals,
-          invoices: mockInvoices,
-          overdueCount,
-          message: "Mock data - HubSpot not connected"
-        });
-      }
+      if (!hubspotClient) return notConnected(res);
 
-      const companyResponse = await hubspotClient.crm.companies.basicApi.getById(
-        companyId,
-        ["name", "bad_debt"]
-      );
+      const companyResponse =
+        await hubspotClient.crm.companies.basicApi.getById(companyId, [
+          "name",
+          "bad_debt",
+        ]);
 
       const dealsResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
         "companies",
@@ -434,13 +431,16 @@ export async function registerRoutes(
         "invoices"
       );
 
-      const deals = [];
+      const deals: any[] = [];
       for (const assoc of dealsResponse.results || []) {
         try {
-          const deal = await hubspotClient.crm.deals.basicApi.getById(
-            assoc.id,
-            ["dealname", "amount", "dealstage", "closedate", "bad_debt"]
-          );
+          const deal = await hubspotClient.crm.deals.basicApi.getById(assoc.id, [
+            "dealname",
+            "amount",
+            "dealstage",
+            "closedate",
+            "bad_debt",
+          ]);
           deals.push({
             id: deal.id,
             dealname: deal.properties.dealname || "",
@@ -455,15 +455,13 @@ export async function registerRoutes(
       }
 
       const dealMap = new Map<string, string>();
-      for (const deal of deals) {
-        dealMap.set(deal.id, deal.dealname);
-      }
+      for (const deal of deals) dealMap.set(deal.id, deal.dealname);
 
-      const invoices = [];
+      const invoices: any[] = [];
       let overdueCount = 0;
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       for (const assoc of invoicesResponse.results || []) {
         try {
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
@@ -471,27 +469,26 @@ export async function registerRoutes(
             assoc.id,
             ["hs_invoice_number", "hs_invoice_status", "hs_due_date", "amount", "bad_debt"]
           );
+
           const status = invoice.properties.hs_invoice_status || "";
           const dueDate = invoice.properties.hs_due_date || null;
-          
           if (status.toLowerCase() === "open" && dueDate) {
-            const dueDateObj = new Date(dueDate);
-            if (dueDateObj < today) {
-              overdueCount++;
-            }
+            if (new Date(dueDate) < today) overdueCount++;
           }
 
           let dealId: string | null = null;
           let dealName: string | null = null;
+
           try {
             const invoiceDealAssoc = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
               "invoices",
               assoc.id,
               "deals"
             );
-            if (invoiceDealAssoc.results && invoiceDealAssoc.results.length > 0) {
+            if (invoiceDealAssoc.results?.length) {
               dealId = invoiceDealAssoc.results[0].id;
               dealName = dealId ? (dealMap.get(dealId) || null) : null;
+
               if (!dealName && dealId) {
                 try {
                   const dealInfo = await hubspotClient.crm.deals.basicApi.getById(dealId, ["dealname"]);
@@ -501,8 +498,8 @@ export async function registerRoutes(
                 }
               }
             }
-          } catch (e) {
-            // Invoice may not have a deal association
+          } catch {
+            // invoice may have no deal association
           }
 
           invoices.push({
@@ -530,11 +527,14 @@ export async function registerRoutes(
         invoices,
         overdueCount,
       });
-    } catch (error: any) {
-      console.error("Error fetching company data:", error?.response?.body || error);
+    } catch (err: any) {
+      console.error("Error fetching company data:", err?.response?.body || err);
       return res.status(500).json({
         success: false,
-        message: error?.response?.body?.message || error?.message || "Failed to fetch company data",
+        message:
+          err?.response?.body?.message ||
+          err?.message ||
+          "Failed to fetch company data",
       });
     }
   });

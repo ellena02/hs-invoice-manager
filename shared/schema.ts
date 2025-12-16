@@ -61,3 +61,10 @@ export interface ArchiveOverdueInvoicesResponse {
   failedInvoices?: { number: string; reason: string }[];
   message?: string;
 }
+
+export interface ArchiveSingleInvoiceResponse {
+  success: boolean;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  message?: string;
+}

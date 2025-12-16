@@ -71,6 +71,69 @@ export async function registerRoutes(
     }
   });
 
+  // Archive a single invoice and mark company as bad debt
+  app.post("/api/company/:companyId/invoice/:invoiceId/archive", async (req, res) => {
+    try {
+      const { companyId, invoiceId } = req.params;
+
+      if (!hubspotClient) {
+        // Mock mode
+        mockState.deletedInvoiceIds.add(invoiceId);
+        mockState.badDebt = true;
+        
+        return res.status(200).json({
+          success: true,
+          invoiceId,
+          message: "Mock response - Invoice archived and company marked as bad debt."
+        });
+      }
+
+      // Get invoice details first
+      const invoice = await hubspotClient.crm.objects.basicApi.getById(
+        "invoices",
+        invoiceId,
+        ["hs_invoice_number", "hs_invoice_status", "hs_collection_status", "hs_payment_status", "hs_amount_paid"]
+      );
+
+      const invoiceStatus = invoice.properties.hs_invoice_status?.toLowerCase() || "";
+      const collectionStatus = invoice.properties.hs_collection_status?.toLowerCase() || "";
+      const paymentStatus = invoice.properties.hs_payment_status?.toLowerCase() || "";
+      const amountPaid = parseFloat(invoice.properties.hs_amount_paid || "0");
+
+      // Verify invoice is overdue and not paid
+      const isOverdue = collectionStatus === "overdue" || invoiceStatus === "overdue";
+      const isPaid = invoiceStatus === "paid" || paymentStatus === "paid" || amountPaid > 0;
+
+      if (!isOverdue || isPaid) {
+        return res.status(400).json({
+          success: false,
+          message: "Invoice must be overdue and not paid to mark as bad debt."
+        });
+      }
+
+      // Archive the invoice
+      await hubspotClient.crm.objects.basicApi.archive("invoices", invoiceId);
+
+      // Mark company as bad debt
+      await hubspotClient.crm.companies.basicApi.update(companyId, {
+        properties: { bad_debt: "true" },
+      });
+
+      return res.status(200).json({
+        success: true,
+        invoiceId,
+        invoiceNumber: invoice.properties.hs_invoice_number,
+        message: `Invoice ${invoice.properties.hs_invoice_number} archived and company marked as bad debt.`
+      });
+    } catch (error: any) {
+      console.error("Archive single invoice error:", error?.response?.body || error);
+      return res.status(500).json({
+        success: false,
+        message: error?.response?.body?.message || error?.message || "Failed to archive invoice."
+      });
+    }
+  });
+
   app.post("/api/company/:companyId/archive-overdue-invoices", async (req, res) => {
     try {
       const { companyId } = req.params;

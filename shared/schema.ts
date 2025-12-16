@@ -1,18 +1,46 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export const markBadDebtRequestSchema = z.object({
+  companyId: z.string().min(1, "Company ID is required"),
+  badDebt: z.union([z.boolean(), z.string(), z.number()]),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
-});
+export type MarkBadDebtRequest = z.infer<typeof markBadDebtRequestSchema>;
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export interface MarkBadDebtResponse {
+  success: boolean;
+  bad_debt?: string;
+  message?: string;
+}
+
+export interface HealthResponse {
+  ok: boolean;
+  timestamp?: string;
+}
+
+export interface Deal {
+  id: string;
+  dealname: string;
+  amount: string | null;
+  dealstage: string;
+  closedate: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  hs_invoice_number: string;
+  hs_invoice_status: string;
+  amount: string | null;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  bad_debt: string;
+}
+
+export interface CompanyData {
+  company: Company | null;
+  deals: Deal[];
+  invoices: Invoice[];
+}

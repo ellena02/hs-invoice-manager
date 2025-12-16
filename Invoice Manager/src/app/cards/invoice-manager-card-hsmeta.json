@@ -5,6 +5,6 @@
     "name": "Invoice Manager",
     "location": "crm.record.sidebar",
     "objectTypes": ["companies"],
-    "entrypoint": "/app/cards/invoice-manager-tab.tsx"
+    "entrypoint": "/app/cards/invoice-manager-card.tsx"
   }
 }

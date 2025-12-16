@@ -1,33 +1,38 @@
 import React from "react";
 import { hubspot, Text, Flex, Button } from "@hubspot/ui-extensions";
 
-type ExtendArgs = {
-  context?: any;
-  actions?: any;
-};
+function getCompanyId(context: unknown): string | null {
+  if (context && typeof context === "object") {
+    const anyCtx = context as any;
+    const id =
+      anyCtx?.crm?.objectId ??
+      anyCtx?.crm?.recordId ??
+      anyCtx?.objectId ??
+      null;
+    return id ? String(id) : null;
+  }
+  return null;
+}
 
-hubspot.extend((args: ExtendArgs) => {
-  const context = args?.context;
-  const actions = args?.actions;
+function getOpenIframeModal(actions: unknown):
+  | ((args: {
+      uri: string;
+      title?: string;
+      width?: number;
+      height?: number;
+    }) => void)
+  | null {
+  if (actions && typeof actions === "object") {
+    const fn = (actions as any)?.openIframeModal;
+    return typeof fn === "function" ? fn : null;
+  }
+  return null;
+}
 
-  const companyId =
-    context?.crm?.objectId ??
-    context?.crm?.recordId ??
-    context?.objectId ??
-    null;
-
-  const canOpen = Boolean(companyId && actions?.openIframeModal);
-
-  const open = () => {
-    if (!companyId || !actions?.openIframeModal) return;
-
-    actions.openIframeModal({
-      uri: `https://hs-invoice-manager.onrender.com/?companyId=${companyId}`,
-      title: "Invoice Manager",
-      width: 1200,
-      height: 800,
-    });
-  };
+hubspot.extend(({ context, actions }) => {
+  const companyId = getCompanyId(context);
+  const openIframeModal = getOpenIframeModal(actions);
+  const canOpen = Boolean(companyId && openIframeModal);
 
   return (
     <Flex direction="column" gap="md">
@@ -35,11 +40,22 @@ hubspot.extend((args: ExtendArgs) => {
 
       <Text>Company ID: {companyId ?? "N/A"}</Text>
 
-      {!actions?.openIframeModal && (
-        <Text>Modal action not available here.</Text>
+      {!openIframeModal && (
+        <Text>Modal is not available in this location.</Text>
       )}
 
-      <Button disabled={!canOpen} onClick={open}>
+      <Button
+        disabled={!canOpen}
+        onClick={() => {
+          if (!companyId || !openIframeModal) return;
+          openIframeModal({
+            uri: `https://hs-invoice-manager.onrender.com/?companyId=${companyId}`,
+            title: "Invoice Manager",
+            width: 1200,
+            height: 800,
+          });
+        }}
+      >
         Open Invoice Manager
       </Button>
     </Flex>

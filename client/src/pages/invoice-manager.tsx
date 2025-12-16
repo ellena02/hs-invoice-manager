@@ -377,7 +377,7 @@ function InvoicesTable({ invoices, isLoading, onMarkBadDebt, markingInvoiceId }:
                             <Ban className="h-3 w-3 mr-1" />
                             Marked as Bad Debt
                           </Badge>
-                        ) : isOverdue ? (
+                        ) : invoice.hs_invoice_status.toLowerCase() === "open" ? (
                           <Button
                             variant="destructive"
                             size="sm"
@@ -482,6 +482,7 @@ export default function InvoiceManager() {
 
   const invoices = companyData?.invoices || [];
   const paidInvoices = invoices.filter(inv => inv.hs_invoice_status.toLowerCase() === "paid");
+  const openInvoices = invoices.filter(inv => inv.hs_invoice_status.toLowerCase() === "open");
   const overdueInvoices = invoices.filter(inv => isInvoiceOverdue(inv));
   const badDebtInvoices = invoices.filter(inv => inv.bad_debt === "true");
   
@@ -489,7 +490,7 @@ export default function InvoiceManager() {
   const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const badDebtAmount = badDebtInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const overdueCount = overdueInvoices.length;
-  const unmarkedOverdueCount = overdueInvoices.filter(inv => inv.bad_debt !== "true").length;
+  const unmarkedOpenCount = openInvoices.filter(inv => inv.bad_debt !== "true").length;
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
   const handleMarkBadDebt = (invoice: Invoice) => {
@@ -497,9 +498,9 @@ export default function InvoiceManager() {
   };
 
   const handleMarkAllBadDebt = () => {
-    const overdueToMark = overdueInvoices.filter(inv => inv.bad_debt !== "true");
-    if (overdueToMark.length > 0) {
-      markAllBadDebtMutation.mutate(overdueToMark);
+    const openToMark = openInvoices.filter(inv => inv.bad_debt !== "true");
+    if (openToMark.length > 0) {
+      markAllBadDebtMutation.mutate(openToMark);
     }
   };
 
@@ -614,7 +615,7 @@ export default function InvoiceManager() {
                   </Badge>
                 )}
               </div>
-              {unmarkedOverdueCount > 0 && (
+              {unmarkedOpenCount > 0 && (
                 <div className="flex items-center gap-2">
                   <Button
                     variant="destructive"
@@ -630,12 +631,12 @@ export default function InvoiceManager() {
                     ) : (
                       <>
                         <Ban className="h-4 w-4 mr-2" />
-                        Mark All Overdue as Bad Debt
+                        Mark All Open as Bad Debt
                       </>
                     )}
                   </Button>
                   <span className="text-sm text-muted-foreground">
-                    ({unmarkedOverdueCount} overdue invoice{unmarkedOverdueCount > 1 ? "s" : ""})
+                    ({unmarkedOpenCount} open invoice{unmarkedOpenCount > 1 ? "s" : ""})
                   </span>
                 </div>
               )}

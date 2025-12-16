@@ -1,0 +1,12 @@
+{
+  "type": "crm-card",
+  "data": {
+    "uid": "invoice_manager_company_tab",
+    "title": "Invoice Manager",
+    "location": "crm.record.tab",
+    "objectTypes": [
+      { "name": "companies" }
+    ],
+    "iframeUrl": "https://hs-invoice-manager.onrender.com/"
+  }
+}

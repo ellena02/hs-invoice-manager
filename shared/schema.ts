@@ -52,6 +52,7 @@ export interface Deal {
   amount: string | null;
   dealstage: string;
   closedate: string | null;
+  bad_debt?: string | null;
 }
 
 export interface Invoice {
@@ -62,6 +63,7 @@ export interface Invoice {
   amount: string | null;
   dealId?: string | null;
   dealName?: string | null;
+  bad_debt?: string | null;
 }
 
 export interface Company {

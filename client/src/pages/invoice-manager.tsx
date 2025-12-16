@@ -209,6 +209,7 @@ function DealsTable({ deals, isLoading }: { deals: Deal[]; isLoading: boolean })
                   <TableHead>Amount</TableHead>
                   <TableHead>Stage</TableHead>
                   <TableHead>Close Date</TableHead>
+                  <TableHead>Bad Debt</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -225,6 +226,16 @@ function DealsTable({ deals, isLoading }: { deals: Deal[]; isLoading: boolean })
                     </TableCell>
                     <TableCell data-testid={`text-closedate-${deal.id}`}>
                       {formatDate(deal.closedate)}
+                    </TableCell>
+                    <TableCell data-testid={`status-bad-debt-deal-${deal.id}`}>
+                      {deal.bad_debt === "true" ? (
+                        <Badge variant="destructive" className="no-default-hover-elevate no-default-active-elevate">
+                          <Ban className="h-3 w-3 mr-1" />
+                          Marked as Bad Debt
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">-</span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -360,8 +371,13 @@ function InvoicesTable({ invoices, isLoading, onMarkBadDebt, markingInvoiceId }:
                       <TableCell data-testid={`text-invoice-amount-${invoice.id}`}>
                         {formatCurrency(invoice.amount)}
                       </TableCell>
-                      <TableCell>
-                        {isOverdue ? (
+                      <TableCell data-testid={`action-invoice-${invoice.id}`}>
+                        {invoice.bad_debt === "true" ? (
+                          <Badge variant="destructive" className="no-default-hover-elevate no-default-active-elevate">
+                            <Ban className="h-3 w-3 mr-1" />
+                            Marked as Bad Debt
+                          </Badge>
+                        ) : isOverdue ? (
                           <Button
                             variant="destructive"
                             size="sm"

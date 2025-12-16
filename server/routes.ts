@@ -15,7 +15,9 @@ const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
 // Mock state for demo mode (persists during session)
 const mockState = {
-  badDebt: false
+  badDebt: false,
+  invoiceBadDebt: new Set<string>(),
+  dealBadDebt: new Set<string>()
 };
 
 // OAuth state storage for CSRF protection (in production, use session or Redis)
@@ -298,6 +300,10 @@ export async function registerRoutes(
       if (!hubspotClient) {
         console.warn("HubSpot client not configured - returning mock response");
         mockState.badDebt = true;
+        mockState.invoiceBadDebt.add(invoiceId);
+        if (dealId) {
+          mockState.dealBadDebt.add(dealId);
+        }
         return res.status(200).json({ 
           success: true, 
           bad_debt: "true",
@@ -376,17 +382,17 @@ export async function registerRoutes(
       const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         const mockDeals = [
-          { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15" },
-          { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
-          { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
+          { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15", bad_debt: mockState.dealBadDebt.has("1") ? "true" : null },
+          { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20", bad_debt: mockState.dealBadDebt.has("2") ? "true" : null },
+          { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10", bad_debt: mockState.dealBadDebt.has("3") ? "true" : null },
         ];
         const mockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License" },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package" },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01", amount: "10000", dealId: "3", dealName: "Training Services" },
-          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20", amount: "5000", dealId: "1", dealName: "Enterprise License" },
-          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package" },
-          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services" },
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License", bad_debt: mockState.invoiceBadDebt.has("101") ? "true" : null },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package", bad_debt: mockState.invoiceBadDebt.has("102") ? "true" : null },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01", amount: "10000", dealId: "3", dealName: "Training Services", bad_debt: mockState.invoiceBadDebt.has("103") ? "true" : null },
+          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20", amount: "5000", dealId: "1", dealName: "Enterprise License", bad_debt: mockState.invoiceBadDebt.has("104") ? "true" : null },
+          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package", bad_debt: mockState.invoiceBadDebt.has("105") ? "true" : null },
+          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services", bad_debt: mockState.invoiceBadDebt.has("106") ? "true" : null },
         ];
         
         const today = new Date();
@@ -432,7 +438,7 @@ export async function registerRoutes(
         try {
           const deal = await hubspotClient.crm.deals.basicApi.getById(
             assoc.id,
-            ["dealname", "amount", "dealstage", "closedate"]
+            ["dealname", "amount", "dealstage", "closedate", "bad_debt"]
           );
           deals.push({
             id: deal.id,
@@ -440,6 +446,7 @@ export async function registerRoutes(
             amount: deal.properties.amount || null,
             dealstage: deal.properties.dealstage || "",
             closedate: deal.properties.closedate || null,
+            bad_debt: deal.properties.bad_debt || null,
           });
         } catch (e) {
           console.error(`Failed to fetch deal ${assoc.id}:`, e);
@@ -461,7 +468,7 @@ export async function registerRoutes(
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
             "invoices",
             assoc.id,
-            ["hs_invoice_number", "hs_invoice_status", "hs_due_date", "amount"]
+            ["hs_invoice_number", "hs_invoice_status", "hs_due_date", "amount", "bad_debt"]
           );
           const status = invoice.properties.hs_invoice_status || "";
           const dueDate = invoice.properties.hs_due_date || null;
@@ -505,6 +512,7 @@ export async function registerRoutes(
             amount: invoice.properties.amount || null,
             dealId,
             dealName,
+            bad_debt: invoice.properties.bad_debt || null,
           });
         } catch (e) {
           console.error(`Failed to fetch invoice ${assoc.id}:`, e);

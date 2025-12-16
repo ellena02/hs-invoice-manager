@@ -5,7 +5,6 @@
     "name": "Invoice Manager",
     "description": "Invoice Manager is a CRM UI extension that allows users to mark invoices, deals, and companies as bad debt directly from the Company record.",
     "distribution": "private",
-
     "auth": {
       "type": "oauth",
       "redirectUrls": [
@@ -23,7 +22,6 @@
       "optionalScopes": [],
       "conditionallyRequiredScopes": []
     },
-
     "permittedUrls": {
       "fetch": [
         "https://api.hubapi.com",
@@ -34,18 +32,11 @@
       ],
       "img": []
     },
-
     "support": {
       "supportEmail": "support@example.com",
       "documentationUrl": "https://example.com/docs",
       "supportUrl": "https://example.com/support",
       "supportPhone": "+18005555555"
-    },
-
-    "extensions": [
-      {
-        "file": "extensions/company-tab.json"
-      }
-    ]
+    }
   }
 }

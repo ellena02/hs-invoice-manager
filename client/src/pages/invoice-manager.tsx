@@ -248,10 +248,9 @@ interface InvoicesTableProps {
   isLoading: boolean;
   onArchiveInvoice: (invoiceId: string) => void;
   archivingInvoiceId: string | null;
-  companyBadDebt: boolean;
 }
 
-function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoiceId, companyBadDebt }: InvoicesTableProps) {
+function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoiceId }: InvoicesTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -353,7 +352,7 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                             variant="destructive"
                             size="sm"
                             onClick={() => onArchiveInvoice(invoice.id)}
-                            disabled={isArchiving || companyBadDebt}
+                            disabled={isArchiving}
                             data-testid={`button-mark-bad-debt-${invoice.id}`}
                           >
                             {isArchiving ? (
@@ -580,7 +579,6 @@ export default function InvoiceManager() {
                 isLoading={isLoading}
                 onArchiveInvoice={handleArchiveInvoice}
                 archivingInvoiceId={archivingInvoiceId}
-                companyBadDebt={badDebtValue}
               />
             </div>
           </CardContent>

@@ -19,6 +19,29 @@ const mockState = {
   deletedInvoiceIds: new Set<string>()
 };
 
+// OAuth state storage for CSRF protection (in production, use session or Redis)
+const oauthStates = new Map<string, { createdAt: number }>();
+
+// Clean up expired states (older than 10 minutes)
+function cleanupOAuthStates() {
+  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+  for (const [state, data] of oauthStates.entries()) {
+    if (data.createdAt < tenMinutesAgo) {
+      oauthStates.delete(state);
+    }
+  }
+}
+
+// Generate random state for OAuth CSRF protection
+function generateOAuthState(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let state = '';
+  for (let i = 0; i < 32; i++) {
+    state += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return state;
+}
+
 // Helper to get HubSpot client for a portal
 async function getHubSpotClient(portalId?: string): Promise<HubSpotClient | null> {
   // First try OAuth token if portalId provided
@@ -94,17 +117,23 @@ export async function registerRoutes(
       });
     }
 
+    // Clean up old states and generate new one for CSRF protection
+    cleanupOAuthStates();
+    const state = generateOAuthState();
+    oauthStates.set(state, { createdAt: Date.now() });
+
     const authUrl = new URL("https://app.hubspot.com/oauth/authorize");
     authUrl.searchParams.set("client_id", HUBSPOT_CLIENT_ID);
     authUrl.searchParams.set("redirect_uri", HUBSPOT_REDIRECT_URI);
     authUrl.searchParams.set("scope", HUBSPOT_SCOPES);
+    authUrl.searchParams.set("state", state);
     
     res.redirect(authUrl.toString());
   });
 
   // OAuth: Handle callback
   app.get("/auth/hubspot/callback", async (req: Request, res: Response) => {
-    const { code, error, error_description } = req.query;
+    const { code, error, error_description, state } = req.query;
 
     if (error) {
       return res.status(400).json({ 
@@ -112,6 +141,12 @@ export async function registerRoutes(
         description: error_description as string 
       });
     }
+
+    // Verify state parameter for CSRF protection
+    if (!state || typeof state !== "string" || !oauthStates.has(state)) {
+      return res.status(400).json({ error: "Invalid or missing state parameter" });
+    }
+    oauthStates.delete(state); // State used, remove it
 
     if (!code || typeof code !== "string") {
       return res.status(400).json({ error: "Missing authorization code" });

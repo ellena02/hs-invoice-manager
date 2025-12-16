@@ -140,16 +140,27 @@ export async function registerRoutes(
 
       if (!hubspotClient) {
         // Mock mode: simulate archiving overdue invoices
-        // Get all mock overdue invoices that haven't been deleted yet
+        // HubSpot statuses: draft, open, paid, voided
+        // Overdue = status is "open" AND due_date < today
         const allMockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid" },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending" },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue" },
-          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "overdue" },
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15" },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15" },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01" },
+          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20" },
+          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null },
+          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01" },
         ];
-        const overdueInvoices = allMockInvoices.filter(
-          inv => inv.hs_invoice_status === "overdue" && !mockState.deletedInvoiceIds.has(inv.id)
-        );
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const overdueInvoices = allMockInvoices.filter(inv => {
+          if (mockState.deletedInvoiceIds.has(inv.id)) return false;
+          if (inv.hs_invoice_status !== "open" || !inv.hs_due_date) return false;
+          const dueDate = new Date(inv.hs_due_date);
+          return dueDate < today;
+        });
+        
         const archivedInvoiceNumbers = overdueInvoices.map(inv => inv.hs_invoice_number);
         overdueInvoices.forEach(inv => mockState.deletedInvoiceIds.add(inv.id));
         mockState.badDebt = true;
@@ -258,15 +269,27 @@ export async function registerRoutes(
           { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
           { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
         ];
+        // HubSpot invoice statuses: draft, open, paid, voided
+        // Overdue is calculated: status is "open" AND due_date < today
         const allMockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000", dealId: "1", dealName: "Enterprise License" },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000", dealId: "2", dealName: "Support Package" },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000", dealId: "3", dealName: "Training Services" },
-          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "overdue", amount: "5000", dealId: "1", dealName: "Enterprise License" },
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License" },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package" },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01", amount: "10000", dealId: "3", dealName: "Training Services" },
+          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20", amount: "5000", dealId: "1", dealName: "Enterprise License" },
+          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package" },
+          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services" },
         ];
-        // Filter out deleted invoices
+        // Filter out archived invoices
         const mockInvoices = allMockInvoices.filter(inv => !mockState.deletedInvoiceIds.has(inv.id));
-        const overdueCount = mockInvoices.filter(inv => inv.hs_invoice_status === "overdue").length;
+        
+        // Calculate overdue: status is "open" AND due_date < today
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const overdueCount = mockInvoices.filter(inv => {
+          if (inv.hs_invoice_status !== "open" || !inv.hs_due_date) return false;
+          const dueDate = new Date(inv.hs_due_date);
+          return dueDate < today;
+        }).length;
         
         return res.status(200).json({
           company: {
@@ -325,16 +348,25 @@ export async function registerRoutes(
 
       const invoices = [];
       let overdueCount = 0;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
       for (const assoc of invoicesResponse.results || []) {
         try {
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
             "invoices",
             assoc.id,
-            ["hs_invoice_number", "hs_invoice_status", "amount"]
+            ["hs_invoice_number", "hs_invoice_status", "hs_due_date", "amount"]
           );
           const status = invoice.properties.hs_invoice_status || "";
-          if (status.toLowerCase() === "overdue") {
-            overdueCount++;
+          const dueDate = invoice.properties.hs_due_date || null;
+          
+          // Calculate overdue: status is "open" AND due_date < today
+          if (status.toLowerCase() === "open" && dueDate) {
+            const dueDateObj = new Date(dueDate);
+            if (dueDateObj < today) {
+              overdueCount++;
+            }
           }
 
           // Try to get deal association for this invoice
@@ -367,6 +399,7 @@ export async function registerRoutes(
             id: invoice.id,
             hs_invoice_number: invoice.properties.hs_invoice_number || "",
             hs_invoice_status: status,
+            hs_due_date: dueDate,
             amount: invoice.properties.amount || null,
             dealId,
             dealName,

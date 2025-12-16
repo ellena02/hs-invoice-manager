@@ -31,7 +31,8 @@ export interface Deal {
 export interface Invoice {
   id: string;
   hs_invoice_number: string;
-  hs_invoice_status: string;
+  hs_invoice_status: string; // draft, open, paid, voided
+  hs_due_date: string | null; // ISO date string
   amount: string | null;
   dealId?: string | null;
   dealName?: string | null;

@@ -85,16 +85,27 @@ function getDealStageBadge(stage: string) {
 }
 
 function getInvoiceStatusBadge(status: string) {
+  // HubSpot invoice statuses: draft, open, paid, voided
   const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
     paid: { label: "Paid", variant: "default" },
-    pending: { label: "Pending", variant: "secondary" },
-    overdue: { label: "Overdue", variant: "destructive" },
+    open: { label: "Open", variant: "secondary" },
     draft: { label: "Draft", variant: "outline" },
     voided: { label: "Voided", variant: "outline" },
   };
 
   const config = statusMap[status.toLowerCase()] || { label: status, variant: "outline" as const };
   return <Badge variant={config.variant}>{config.label}</Badge>;
+}
+
+function isInvoiceOverdue(invoice: Invoice): boolean {
+  // Overdue = status is "open" AND due_date < today
+  if (invoice.hs_invoice_status.toLowerCase() !== "open") return false;
+  if (!invoice.hs_due_date) return false;
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueDate = new Date(invoice.hs_due_date);
+  return dueDate < today;
 }
 
 interface PaginationProps {
@@ -315,13 +326,14 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                   <TableHead>Invoice Number</TableHead>
                   <TableHead>Deal</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Due Date</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedInvoices.map((invoice) => {
-                  const isOverdue = invoice.hs_invoice_status.toLowerCase() === "overdue";
+                  const isOverdue = isInvoiceOverdue(invoice);
                   const isArchiving = archivingInvoiceId === invoice.id;
                   
                   return (
@@ -341,7 +353,17 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                         )}
                       </TableCell>
                       <TableCell data-testid={`status-invoice-${invoice.id}`}>
-                        {getInvoiceStatusBadge(invoice.hs_invoice_status)}
+                        <div className="flex items-center gap-2">
+                          {getInvoiceStatusBadge(invoice.hs_invoice_status)}
+                          {isOverdue && (
+                            <Badge variant="destructive" className="text-xs">Overdue</Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell data-testid={`text-invoice-due-date-${invoice.id}`}>
+                        <span className={isOverdue ? "text-destructive font-medium" : ""}>
+                          {formatDate(invoice.hs_due_date)}
+                        </span>
                       </TableCell>
                       <TableCell data-testid={`text-invoice-amount-${invoice.id}`}>
                         {formatCurrency(invoice.amount)}

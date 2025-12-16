@@ -48,18 +48,16 @@ export interface CompanyData {
   overdueCount?: number;
 }
 
-export const deleteOverdueInvoicesRequestSchema = z.object({
+export const archiveOverdueInvoicesRequestSchema = z.object({
   companyId: z.string().min(1, "Company ID is required"),
 });
 
-export type DeleteOverdueInvoicesRequest = z.infer<typeof deleteOverdueInvoicesRequestSchema>;
+export type ArchiveOverdueInvoicesRequest = z.infer<typeof archiveOverdueInvoicesRequestSchema>;
 
-export interface DeleteOverdueInvoicesResponse {
+export interface ArchiveOverdueInvoicesResponse {
   success: boolean;
-  deletedCount: number;
-  deletedInvoices: string[];
-  voidedCount?: number;
-  voidedInvoices?: string[];
+  archivedCount: number;
+  archivedInvoices: string[];
   failedInvoices?: { number: string; reason: string }[];
   message?: string;
 }

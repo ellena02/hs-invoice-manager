@@ -39,7 +39,7 @@ import {
   Trash2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { CompanyData, DeleteOverdueInvoicesResponse, Deal, Invoice } from "@shared/schema";
+import type { CompanyData, ArchiveOverdueInvoicesResponse, Deal, Invoice } from "@shared/schema";
 
 const DEMO_COMPANY_ID = "demo-company-123";
 const PAGE_SIZE = 10;
@@ -351,9 +351,9 @@ export default function InvoiceManager() {
     queryKey: ["/api/company", DEMO_COMPANY_ID],
   });
 
-  const deleteOverdueMutation = useMutation<DeleteOverdueInvoicesResponse, Error>({
+  const archiveOverdueMutation = useMutation<ArchiveOverdueInvoicesResponse, Error>({
     mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/delete-overdue-invoices`, {});
+      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/archive-overdue-invoices`, {});
       return response.json();
     },
     onSuccess: (data) => {
@@ -361,14 +361,10 @@ export default function InvoiceManager() {
       setShowConfirmDialog(false);
       
       let message = "Company marked as bad debt.";
-      if (data.deletedCount > 0) {
-        message += ` Deleted ${data.deletedCount} invoice(s): ${data.deletedInvoices.join(", ")}.`;
-      }
-      if (data.voidedCount && data.voidedCount > 0) {
-        message += ` Voided ${data.voidedCount} invoice(s): ${data.voidedInvoices?.join(", ")}.`;
-      }
-      if (data.deletedCount === 0 && (!data.voidedCount || data.voidedCount === 0)) {
-        message += " No overdue unpaid invoices to process.";
+      if (data.archivedCount > 0) {
+        message += ` Archived ${data.archivedCount} invoice(s): ${data.archivedInvoices.join(", ")}. Hidden from reporting.`;
+      } else {
+        message += " No overdue unpaid invoices to archive.";
       }
       
       setSuccessMessage(message);
@@ -378,7 +374,7 @@ export default function InvoiceManager() {
     onError: (error) => {
       setSuccessMessage(null);
       setShowConfirmDialog(false);
-      setErrorMessage(error.message || "Failed to delete overdue invoices.");
+      setErrorMessage(error.message || "Failed to archive overdue invoices.");
       setTimeout(() => setErrorMessage(null), 5000);
     },
   });
@@ -394,8 +390,8 @@ export default function InvoiceManager() {
     }
   };
 
-  const handleConfirmDelete = () => {
-    deleteOverdueMutation.mutate();
+  const handleConfirmArchive = () => {
+    archiveOverdueMutation.mutate();
   };
 
   return (
@@ -436,8 +432,8 @@ export default function InvoiceManager() {
                   </Label>
                   <p className="text-sm text-muted-foreground">
                     {overdueCount > 0 
-                      ? `${overdueCount} overdue invoice${overdueCount > 1 ? "s" : ""} totaling ${formatCurrency(totalOverdueAmount.toString())} will be permanently deleted`
-                      : "No overdue invoices to delete"
+                      ? `${overdueCount} overdue invoice${overdueCount > 1 ? "s" : ""} totaling ${formatCurrency(totalOverdueAmount.toString())} will be archived (hidden from reporting)`
+                      : "No overdue invoices to archive"
                     }
                   </p>
                 </div>
@@ -451,18 +447,18 @@ export default function InvoiceManager() {
                   <Button
                     variant="destructive"
                     onClick={handleMarkBadDebt}
-                    disabled={deleteOverdueMutation.isPending || isLoading || overdueCount === 0 || badDebtValue}
+                    disabled={archiveOverdueMutation.isPending || isLoading || overdueCount === 0 || badDebtValue}
                     data-testid="button-mark-bad-debt"
                   >
-                    {deleteOverdueMutation.isPending ? (
+                    {archiveOverdueMutation.isPending ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        Deleting...
+                        Archiving...
                       </>
                     ) : (
                       <>
                         <Trash2 className="h-4 w-4 mr-2" />
-                        Delete Overdue Invoices
+                        Archive Overdue Invoices
                       </>
                     )}
                   </Button>
@@ -519,24 +515,24 @@ export default function InvoiceManager() {
       </div>
 
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <DialogContent data-testid="dialog-confirm-delete">
+        <DialogContent data-testid="dialog-confirm-archive">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
-              Confirm Permanent Deletion
+              Confirm Archive Bad Debt
             </DialogTitle>
             <DialogDescription className="space-y-3 pt-2">
               <p>
                 You are about to mark this company as bad debt. This will:
               </p>
               <ul className="list-disc list-inside space-y-1 text-sm">
-                <li>Process {overdueCount} overdue unpaid invoice{overdueCount > 1 ? "s" : ""}</li>
+                <li>Archive {overdueCount} overdue unpaid invoice{overdueCount > 1 ? "s" : ""}</li>
                 <li>Total amount: {formatCurrency(totalOverdueAmount.toString())}</li>
-                <li>Draft invoices will be deleted; finalized invoices will be voided</li>
+                <li>Hide archived invoices from HubSpot reporting</li>
                 <li>Mark the company with a "Bad Debt" flag</li>
               </ul>
-              <p className="text-sm font-medium text-destructive">
-                This action cannot be undone.
+              <p className="text-sm text-muted-foreground">
+                Archived invoices can be restored from the recycle bin within 90 days.
               </p>
             </DialogDescription>
           </DialogHeader>
@@ -544,25 +540,25 @@ export default function InvoiceManager() {
             <Button
               variant="outline"
               onClick={() => setShowConfirmDialog(false)}
-              data-testid="button-cancel-delete"
+              data-testid="button-cancel-archive"
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
-              onClick={handleConfirmDelete}
-              disabled={deleteOverdueMutation.isPending}
-              data-testid="button-confirm-delete"
+              onClick={handleConfirmArchive}
+              disabled={archiveOverdueMutation.isPending}
+              data-testid="button-confirm-archive"
             >
-              {deleteOverdueMutation.isPending ? (
+              {archiveOverdueMutation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Deleting...
+                  Archiving...
                 </>
               ) : (
                 <>
                   <Trash2 className="h-4 w-4 mr-2" />
-                  Delete & Mark Bad Debt
+                  Archive & Mark Bad Debt
                 </>
               )}
             </Button>

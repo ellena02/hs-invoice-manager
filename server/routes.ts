@@ -8,9 +8,10 @@ import { storage } from "./storage";
 const HUBSPOT_CLIENT_ID = process.env.HUBSPOT_CLIENT_ID;
 const HUBSPOT_CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
 const HUBSPOT_REDIRECT_URI = process.env.HUBSPOT_REDIRECT_URI || "http://localhost:5000/auth/hubspot/callback";
-const HUBSPOT_SCOPES = "crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.invoices.read crm.objects.invoices.write";
+const HUBSPOT_SCOPES ="oauth crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write crm.objects.invoices.read crm.objects.invoices.write";
 
-// For backwards compatibility - private app token (optional)
+  // For backwards compatibility - private app token (optional)
+
 const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
 // Mock state for demo mode (persists during session)

@@ -2,29 +2,37 @@
   "uid": "InvoiceManager_app",
   "type": "app",
   "config": {
-    "description": "An example to demonstrate how to build a private oauth app with developer projects.",
-    "name": "Invoice Manager-Application",
+    "name": "Invoice Manager",
+    "description": "Invoice Manager is a CRM UI extension that allows users to mark invoices, deals, and companies as bad debt directly from the Company record.",
     "distribution": "private",
+
     "auth": {
       "type": "oauth",
       "redirectUrls": [
-        "http://localhost:3000"
+        "https://hs-invoice-manager.onrender.com/auth/hubspot/callback"
       ],
       "requiredScopes": [
         "oauth",
-        "crm.objects.contacts.read",
-        "crm.objects.contacts.write"
+        "crm.objects.companies.read",
+        "crm.objects.companies.write",
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.objects.invoices.read",
+        "crm.objects.invoices.write"
       ],
       "optionalScopes": [],
       "conditionallyRequiredScopes": []
     },
+
     "permittedUrls": {
       "fetch": [
-        "https://api.hubapi.com"
+        "https://api.hubapi.com",
+        "https://hs-invoice-manager.onrender.com"
       ],
       "iframe": [],
       "img": []
     },
+
     "support": {
       "supportEmail": "support@example.com",
       "documentationUrl": "https://example.com/docs",

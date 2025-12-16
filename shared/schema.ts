@@ -33,6 +33,8 @@ export interface Invoice {
   hs_invoice_number: string;
   hs_invoice_status: string;
   amount: string | null;
+  dealId?: string | null;
+  dealName?: string | null;
 }
 
 export interface Company {

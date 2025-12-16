@@ -262,7 +262,8 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
       (invoice) =>
         invoice.hs_invoice_number.toLowerCase().includes(term) ||
         invoice.hs_invoice_status.toLowerCase().includes(term) ||
-        (invoice.amount && invoice.amount.includes(term))
+        (invoice.amount && invoice.amount.includes(term)) ||
+        (invoice.dealName && invoice.dealName.toLowerCase().includes(term))
     );
   }, [invoices, searchTerm]);
 
@@ -313,6 +314,7 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
               <TableHeader>
                 <TableRow>
                   <TableHead>Invoice Number</TableHead>
+                  <TableHead>Deal</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Action</TableHead>
@@ -331,6 +333,13 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                     >
                       <TableCell className="font-medium" data-testid={`text-invoice-number-${invoice.id}`}>
                         {invoice.hs_invoice_number}
+                      </TableCell>
+                      <TableCell data-testid={`text-invoice-deal-${invoice.id}`}>
+                        {invoice.dealName ? (
+                          <span className="text-sm">{invoice.dealName}</span>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">-</span>
+                        )}
                       </TableCell>
                       <TableCell data-testid={`status-invoice-${invoice.id}`}>
                         {getInvoiceStatusBadge(invoice.hs_invoice_status)}
@@ -385,6 +394,7 @@ export default function InvoiceManager() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [archivingInvoiceId, setArchivingInvoiceId] = useState<string | null>(null);
+  const [isArchivingAll, setIsArchivingAll] = useState(false);
 
   const { data: companyData, isLoading, refetch, isRefetching } = useQuery<CompanyData>({
     queryKey: ["/api/company", DEMO_COMPANY_ID],
@@ -411,11 +421,42 @@ export default function InvoiceManager() {
     },
   });
 
+  const archiveAllOverdueMutation = useMutation<ArchiveOverdueInvoicesResponse, Error>({
+    mutationFn: async () => {
+      setIsArchivingAll(true);
+      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/archive-overdue-invoices`, {});
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setErrorMessage(null);
+      setIsArchivingAll(false);
+      let message = "Company marked as bad debt.";
+      if (data.archivedCount > 0) {
+        message += ` Archived ${data.archivedCount} invoice(s): ${data.archivedInvoices.join(", ")}. Hidden from reporting.`;
+      }
+      setSuccessMessage(message);
+      queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
+      setTimeout(() => setSuccessMessage(null), 8000);
+    },
+    onError: (error) => {
+      setSuccessMessage(null);
+      setIsArchivingAll(false);
+      setErrorMessage(error.message || "Failed to archive overdue invoices.");
+      setTimeout(() => setErrorMessage(null), 5000);
+    },
+  });
+
   const overdueCount = companyData?.overdueCount || 0;
+  const overdueInvoices = companyData?.invoices?.filter(inv => inv.hs_invoice_status.toLowerCase() === "overdue") || [];
+  const totalOverdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
   const handleArchiveInvoice = (invoiceId: string) => {
     archiveSingleInvoiceMutation.mutate(invoiceId);
+  };
+
+  const handleArchiveAllOverdue = () => {
+    archiveAllOverdueMutation.mutate();
   };
 
   return (
@@ -499,11 +540,41 @@ export default function InvoiceManager() {
                   Associated Invoices
                 </h3>
                 {overdueCount > 0 && (
-                  <Badge variant="destructive" data-testid="badge-overdue-count">
-                    {overdueCount} Overdue
-                  </Badge>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Badge variant="destructive" data-testid="badge-overdue-count">
+                      {overdueCount} Overdue
+                    </Badge>
+                    <span className="text-sm text-muted-foreground">
+                      ({formatCurrency(totalOverdueAmount.toString())} total)
+                    </span>
+                  </div>
                 )}
               </div>
+              {overdueCount > 0 && !badDebtValue && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="destructive"
+                    onClick={handleArchiveAllOverdue}
+                    disabled={isArchivingAll || archiveSingleInvoiceMutation.isPending}
+                    data-testid="button-mark-all-bad-debt"
+                  >
+                    {isArchivingAll ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Archiving All...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Mark All Overdue as Bad Debt
+                      </>
+                    )}
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Archive all {overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""} at once
+                  </span>
+                </div>
+              )}
               <InvoicesTable 
                 invoices={companyData?.invoices || []} 
                 isLoading={isLoading}

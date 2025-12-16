@@ -140,15 +140,25 @@ export async function registerRoutes(
 
       if (!hubspotClient) {
         // Mock mode: simulate archiving overdue invoices
-        const mockArchivedInvoices = ["INV-2024-003"];
-        mockArchivedInvoices.forEach(() => mockState.deletedInvoiceIds.add("103"));
+        // Get all mock overdue invoices that haven't been deleted yet
+        const allMockInvoices = [
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid" },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending" },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue" },
+          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "overdue" },
+        ];
+        const overdueInvoices = allMockInvoices.filter(
+          inv => inv.hs_invoice_status === "overdue" && !mockState.deletedInvoiceIds.has(inv.id)
+        );
+        const archivedInvoiceNumbers = overdueInvoices.map(inv => inv.hs_invoice_number);
+        overdueInvoices.forEach(inv => mockState.deletedInvoiceIds.add(inv.id));
         mockState.badDebt = true;
         
         return res.status(200).json({
           success: true,
-          archivedCount: mockArchivedInvoices.length,
-          archivedInvoices: mockArchivedInvoices,
-          message: "Mock response - In production, overdue unpaid invoices would be archived (hidden from reporting)."
+          archivedCount: archivedInvoiceNumbers.length,
+          archivedInvoices: archivedInvoiceNumbers,
+          message: "Mock response - Overdue invoices archived (hidden from reporting)."
         });
       }
 
@@ -243,10 +253,16 @@ export async function registerRoutes(
       const { companyId } = req.params;
 
       if (!hubspotClient) {
+        const mockDeals = [
+          { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15" },
+          { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
+          { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
+        ];
         const allMockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000" },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000" },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000" },
+          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000", dealId: "1", dealName: "Enterprise License" },
+          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000", dealId: "2", dealName: "Support Package" },
+          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000", dealId: "3", dealName: "Training Services" },
+          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "overdue", amount: "5000", dealId: "1", dealName: "Enterprise License" },
         ];
         // Filter out deleted invoices
         const mockInvoices = allMockInvoices.filter(inv => !mockState.deletedInvoiceIds.has(inv.id));
@@ -258,11 +274,7 @@ export async function registerRoutes(
             name: "Demo Company",
             bad_debt: mockState.badDebt ? "true" : "false"
           },
-          deals: [
-            { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15" },
-            { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
-            { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
-          ],
+          deals: mockDeals,
           invoices: mockInvoices,
           overdueCount,
           message: "Mock data - HubSpot token not configured"
@@ -305,6 +317,12 @@ export async function registerRoutes(
         }
       }
 
+      // Create a map of deal IDs to deal names for quick lookup
+      const dealMap = new Map<string, string>();
+      for (const deal of deals) {
+        dealMap.set(deal.id, deal.dealname);
+      }
+
       const invoices = [];
       let overdueCount = 0;
       for (const assoc of invoicesResponse.results || []) {
@@ -318,11 +336,40 @@ export async function registerRoutes(
           if (status.toLowerCase() === "overdue") {
             overdueCount++;
           }
+
+          // Try to get deal association for this invoice
+          let dealId: string | null = null;
+          let dealName: string | null = null;
+          try {
+            const invoiceDealAssoc = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
+              "invoices",
+              assoc.id,
+              "deals"
+            );
+            if (invoiceDealAssoc.results && invoiceDealAssoc.results.length > 0) {
+              dealId = invoiceDealAssoc.results[0].id;
+              dealName = dealMap.get(dealId) || null;
+              // If deal not in our map, fetch it
+              if (!dealName && dealId) {
+                try {
+                  const dealInfo = await hubspotClient.crm.deals.basicApi.getById(dealId, ["dealname"]);
+                  dealName = dealInfo.properties.dealname || null;
+                } catch (e) {
+                  console.error(`Failed to fetch deal name for ${dealId}:`, e);
+                }
+              }
+            }
+          } catch (e) {
+            // Invoice may not have a deal association
+          }
+
           invoices.push({
             id: invoice.id,
             hs_invoice_number: invoice.properties.hs_invoice_number || "",
             hs_invoice_status: status,
             amount: invoice.properties.amount || null,
+            dealId,
+            dealName,
           });
         } catch (e) {
           console.error(`Failed to fetch invoice ${assoc.id}:`, e);

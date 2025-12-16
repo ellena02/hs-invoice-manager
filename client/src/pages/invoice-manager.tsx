@@ -471,7 +471,7 @@ export default function InvoiceManager() {
   });
 
   const overdueCount = companyData?.overdueCount || 0;
-  const overdueInvoices = companyData?.invoices?.filter(inv => inv.hs_invoice_status.toLowerCase() === "overdue") || [];
+  const overdueInvoices = companyData?.invoices?.filter(inv => isInvoiceOverdue(inv)) || [];
   const totalOverdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
   const badDebtValue = companyData?.company?.bad_debt === "true";
 

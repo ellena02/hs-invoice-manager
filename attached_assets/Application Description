@@ -1,32 +1,34 @@
-Opis aplikacije: Invoice Manager (Private CRM UI extension + eksterni backend)
+App description: Invoice Manager (Private CRM UI extension + external backend)
 
-Invoice Manager je private HubSpot aplikacija koja dodaje CRM Record Tab na Company record.
+Invoice Manager is a private HubSpot app that adds a CRM Record Tab on the Company record.
 
-Tab prikazuje:
+The tab shows:
 
-Toggle “Mark invoices as bad debt” koji upisuje/uklanja oznaku na company property bad_debt (single checkbox).
+A toggle “Mark invoices as bad debt” that sets/unsets a flag on the company property bad_debt (single checkbox).
 
-Dve tabele:
+Two tables:
 
 Associated Deals (objectTypeId 0-3)
 
 Associated Invoices (objectTypeId 0-53)
 
-Pošto je projekat na platform version 2025.2, HubSpot “app functions / serverless functions” se ne koriste za ovaj tok. Umesto toga, toggle poziva eksterni backend endpoint preko hubspot.fetch().
+Because the project is on platform version 2025.2, HubSpot app functions / serverless functions are not used for this flow. Instead, the toggle calls an external backend endpoint via hubspot.fetch().
 
-Backend:
+Backend
 
-prima companyId + badDebt
+The backend:
 
-koristi Private App Access Token (scope: crm.objects.companies.write)
+receives companyId + badDebt
 
-ažurira company property:
+uses a Private App Access Token (scope: crm.objects.companies.write)
 
-bad_debt = "true" kada je toggle ON
+updates the company property:
 
-bad_debt = "false" kada je toggle OFF
+bad_debt = "true" when the toggle is ON
 
-A) Backend kod (Node/Express) – /mark-bad-debt
+bad_debt = "false" when the toggle is OFF
+
+A) Backend code (Node/Express) – /mark-bad-debt
 package.json
 {
   "name": "invoice-manager-backend",
@@ -98,21 +100,21 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.listen(port, () => console.log(`Backend listening on :${port}`));
 
-.env (lokalno)
+.env (local)
 HS_PRIVATE_APP_TOKEN=PASTE_PRIVATE_APP_ACCESS_TOKEN_HERE
 PORT=3000
 
 
-Endpoint posle deploy-a (primer):
+Endpoint after deploy (example):
 
-POST https://<tvoj-backend-host>/mark-bad-debt
+POST https://<your-backend-host>/mark-bad-debt
 
-B) HubSpot UI extension (CRM tab) – novi kod bez serverless
-1) Izmeni app-hsmeta.json (permittedUrls.fetch)
+B) HubSpot UI extension (CRM tab) – updated code without serverless
+1) Update app-hsmeta.json (permittedUrls.fetch)
 
-Dodaj URL svog backenda u fetch listu.
+Add your backend URL origin to the fetch allowlist.
 
-Pre:
+Before:
 
 "permittedUrls": {
   "fetch": ["https://api.hubapi.com"],
@@ -121,7 +123,7 @@ Pre:
 }
 
 
-Posle (primer):
+After (example):
 
 "permittedUrls": {
   "fetch": [
@@ -133,15 +135,15 @@ Posle (primer):
 }
 
 
-Mora biti tačan origin (bez path-a), npr. https://invoice-manager-backend.onrender.com
+⚠️ It must be the exact origin (no path), e.g. https://invoice-manager-backend.onrender.com
 
-2) Zameni cards/invoice-manager.tsx ovim kodom
+2) Replace cards/invoice-manager.tsx with this code
 
-Ovo je tvoja verzija, ali:
+This version:
 
-uklonjen runServerlessFunction
+removes runServerlessFunction
 
-dodato hubspot.fetch na backend
+adds hubspot.fetch to call the backend
 
 import React, { useState } from "react";
 import { hubspot, Toggle, Text, Flex, Divider, Alert } from "@hubspot/ui-extensions";
@@ -151,7 +153,7 @@ type InvoiceManagerProps = {
   context: any;
 };
 
-// ✅ PROMENI OVO na svoj deploy URL:
+// ✅ CHANGE THIS to your deployed backend URL:
 const BACKEND_ORIGIN = "https://invoice-manager-backend.onrender.com";
 const MARK_BAD_DEBT_URL = `${BACKEND_ORIGIN}/mark-bad-debt`;
 
@@ -194,7 +196,7 @@ const InvoiceManagerCard: React.FC<InvoiceManagerProps> = ({ context }) => {
 
       if (!body?.success) {
         setServerError(body?.message || "Backend returned an error.");
-        // opciono rollback:
+        // optional rollback:
         // setBadDebt(!checked);
       } else {
         setSuccessMessage("Bad debt status updated successfully.");
@@ -202,7 +204,7 @@ const InvoiceManagerCard: React.FC<InvoiceManagerProps> = ({ context }) => {
     } catch (error: any) {
       console.error("Error calling backend:", error);
       setServerError(error?.message || "Failed to call backend.");
-      // opciono rollback:
+      // optional rollback:
       // setBadDebt(!checked);
     } finally {
       setLoading(false);
@@ -263,18 +265,22 @@ hubspot.extend<"crm.record.tab">(({ context }: any) => (
   <InvoiceManagerCard context={context} />
 ));
 
-C) Checklist da proradi
+C) Checklist to make it work
 
-Backend deployovan i radi:
+Backend is deployed and working:
 
-GET /health vraća { ok: true }
+GET /health returns { ok: true }
 
-POST /mark-bad-debt radi u Postman/curl
+POST /mark-bad-debt works in Postman/curl
 
-app-hsmeta.json ima backend origin u permittedUrls.fetch
+HubSpot project setup:
 
-cards/invoice-manager.tsx koristi hubspot.fetch i pravi URL ka backendu
+app-hsmeta.json includes the backend origin in permittedUrls.fetch
+
+cards/invoice-manager.tsx uses hubspot.fetch and calls the correct backend URL
+
+Deploy:
 
 hs project build + hs project deploy
 
-App instalirana + tab prikazan na Company recordu
+App installed + tab is visible on the Company record

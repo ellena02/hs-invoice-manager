@@ -58,6 +58,8 @@ export interface DeleteOverdueInvoicesResponse {
   success: boolean;
   deletedCount: number;
   deletedInvoices: string[];
+  voidedCount?: number;
+  voidedInvoices?: string[];
   failedInvoices?: { number: string; reason: string }[];
   message?: string;
 }

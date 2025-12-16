@@ -359,13 +359,21 @@ export default function InvoiceManager() {
     onSuccess: (data) => {
       setErrorMessage(null);
       setShowConfirmDialog(false);
+      
+      let message = "Company marked as bad debt.";
       if (data.deletedCount > 0) {
-        setSuccessMessage(`Successfully deleted ${data.deletedCount} overdue invoice(s): ${data.deletedInvoices.join(", ")}. Company marked as bad debt.`);
-      } else {
-        setSuccessMessage("Company marked as bad debt. No overdue invoices to delete.");
+        message += ` Deleted ${data.deletedCount} invoice(s): ${data.deletedInvoices.join(", ")}.`;
       }
+      if (data.voidedCount && data.voidedCount > 0) {
+        message += ` Voided ${data.voidedCount} invoice(s): ${data.voidedInvoices?.join(", ")}.`;
+      }
+      if (data.deletedCount === 0 && (!data.voidedCount || data.voidedCount === 0)) {
+        message += " No overdue unpaid invoices to process.";
+      }
+      
+      setSuccessMessage(message);
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
-      setTimeout(() => setSuccessMessage(null), 5000);
+      setTimeout(() => setSuccessMessage(null), 8000);
     },
     onError: (error) => {
       setSuccessMessage(null);
@@ -522,12 +530,13 @@ export default function InvoiceManager() {
                 You are about to mark this company as bad debt. This will:
               </p>
               <ul className="list-disc list-inside space-y-1 text-sm">
-                <li>Permanently delete {overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""}</li>
+                <li>Process {overdueCount} overdue unpaid invoice{overdueCount > 1 ? "s" : ""}</li>
                 <li>Total amount: {formatCurrency(totalOverdueAmount.toString())}</li>
+                <li>Draft invoices will be deleted; finalized invoices will be voided</li>
                 <li>Mark the company with a "Bad Debt" flag</li>
               </ul>
               <p className="text-sm font-medium text-destructive">
-                This action cannot be undone. Deleted invoices cannot be recovered.
+                This action cannot be undone.
               </p>
             </DialogDescription>
           </DialogHeader>

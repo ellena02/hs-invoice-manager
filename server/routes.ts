@@ -85,7 +85,8 @@ export async function registerRoutes(
           success: true,
           deletedCount: mockDeletedInvoices.length,
           deletedInvoices: mockDeletedInvoices,
-          message: "Mock response - HubSpot token not configured. In production, overdue invoices would be permanently deleted."
+          voidedInvoices: [],
+          message: "Mock response - In production, overdue unpaid invoices would be deleted or voided."
         });
       }
 
@@ -95,20 +96,31 @@ export async function registerRoutes(
         "invoices"
       );
 
-      const overdueInvoices: { id: string; number: string }[] = [];
+      // Filter invoices: must be OVERDUE and NOT PAID
+      const overdueUnpaidInvoices: { id: string; number: string; status: string }[] = [];
       
       for (const assoc of invoicesResponse.results || []) {
         try {
           const invoice = await hubspotClient.crm.objects.basicApi.getById(
             "invoices",
             assoc.id,
-            ["hs_invoice_number", "hs_invoice_status"]
+            ["hs_invoice_number", "hs_invoice_status", "hs_collection_status", "hs_payment_status", "hs_amount_paid"]
           );
           
-          if (invoice.properties.hs_invoice_status?.toLowerCase() === "overdue") {
-            overdueInvoices.push({
+          const invoiceStatus = invoice.properties.hs_invoice_status?.toLowerCase() || "";
+          const collectionStatus = invoice.properties.hs_collection_status?.toLowerCase() || "";
+          const paymentStatus = invoice.properties.hs_payment_status?.toLowerCase() || "";
+          const amountPaid = parseFloat(invoice.properties.hs_amount_paid || "0");
+          
+          // Check if invoice is overdue (collection status OR invoice status) AND not paid
+          const isOverdue = collectionStatus === "overdue" || invoiceStatus === "overdue";
+          const isPaid = invoiceStatus === "paid" || paymentStatus === "paid" || amountPaid > 0;
+          
+          if (isOverdue && !isPaid) {
+            overdueUnpaidInvoices.push({
               id: invoice.id,
-              number: invoice.properties.hs_invoice_number || invoice.id
+              number: invoice.properties.hs_invoice_number || invoice.id,
+              status: invoiceStatus
             });
           }
         } catch (e) {
@@ -117,13 +129,13 @@ export async function registerRoutes(
       }
 
       const deletedInvoices: string[] = [];
+      const voidedInvoices: string[] = [];
       const failedInvoices: { number: string; reason: string }[] = [];
       
-      for (const invoice of overdueInvoices) {
+      for (const invoice of overdueUnpaidInvoices) {
         try {
-          // Use the purge/delete endpoint for permanent deletion
-          // HubSpot client doesn't have a direct purge method, so we use apiRequest
-          const response = await fetch(
+          // First, try to delete (only works for draft invoices)
+          const deleteResponse = await fetch(
             `https://api.hubapi.com/crm/v3/objects/invoices/${invoice.id}`,
             {
               method: "DELETE",
@@ -134,17 +146,47 @@ export async function registerRoutes(
             }
           );
           
-          if (response.ok || response.status === 204) {
+          if (deleteResponse.ok || deleteResponse.status === 204) {
             deletedInvoices.push(invoice.number);
           } else {
-            const errorBody = await response.json().catch(() => ({}));
-            failedInvoices.push({
-              number: invoice.number,
-              reason: errorBody.message || `HTTP ${response.status}`
-            });
+            // If delete fails (finalized invoice), try to void it instead
+            console.log(`Delete failed for ${invoice.number}, attempting to void...`);
+            try {
+              await hubspotClient.crm.objects.basicApi.update(
+                "invoices",
+                invoice.id,
+                { properties: { hs_invoice_status: "voided" } }
+              );
+              voidedInvoices.push(invoice.number);
+            } catch (voidError: any) {
+              // If voiding also fails, try using the commerce void endpoint
+              const voidResponse = await fetch(
+                `https://api.hubapi.com/crm/v3/objects/invoices/${invoice.id}`,
+                {
+                  method: "PATCH",
+                  headers: {
+                    "Authorization": `Bearer ${HS_PRIVATE_APP_TOKEN}`,
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    properties: { hs_invoice_status: "voided" }
+                  })
+                }
+              );
+              
+              if (voidResponse.ok) {
+                voidedInvoices.push(invoice.number);
+              } else {
+                const errorBody = await deleteResponse.json().catch(() => ({}));
+                failedInvoices.push({
+                  number: invoice.number,
+                  reason: errorBody.message || "Cannot delete or void finalized invoice"
+                });
+              }
+            }
           }
         } catch (e: any) {
-          console.error(`Failed to delete invoice ${invoice.id}:`, e);
+          console.error(`Failed to process invoice ${invoice.id}:`, e);
           failedInvoices.push({
             number: invoice.number,
             reason: e.message || "Unknown error"
@@ -152,21 +194,31 @@ export async function registerRoutes(
         }
       }
 
+      // Mark company as bad debt
       await hubspotClient.crm.companies.basicApi.update(companyId, {
         properties: { bad_debt: "true" },
       });
 
-      let message = `Successfully deleted ${deletedInvoices.length} overdue invoice(s) and marked company as bad debt.`;
+      const totalProcessed = deletedInvoices.length + voidedInvoices.length;
+      let message = `Company marked as bad debt. `;
+      if (deletedInvoices.length > 0) {
+        message += `Deleted ${deletedInvoices.length} invoice(s). `;
+      }
+      if (voidedInvoices.length > 0) {
+        message += `Voided ${voidedInvoices.length} invoice(s). `;
+      }
       if (failedInvoices.length > 0) {
-        message += ` Failed to delete ${failedInvoices.length} invoice(s): ${failedInvoices.map(f => `${f.number} (${f.reason})`).join(", ")}`;
+        message += `Failed to process ${failedInvoices.length} invoice(s): ${failedInvoices.map(f => `${f.number} (${f.reason})`).join(", ")}`;
       }
 
       return res.status(200).json({
         success: true,
         deletedCount: deletedInvoices.length,
         deletedInvoices,
+        voidedCount: voidedInvoices.length,
+        voidedInvoices,
         failedInvoices,
-        message
+        message: message.trim()
       });
     } catch (error: any) {
       console.error("Delete overdue invoices error:", error?.response?.body || error);
@@ -174,7 +226,9 @@ export async function registerRoutes(
         success: false,
         deletedCount: 0,
         deletedInvoices: [],
-        message: error?.response?.body?.message || error?.message || "Failed to delete overdue invoices."
+        voidedCount: 0,
+        voidedInvoices: [],
+        message: error?.response?.body?.message || error?.message || "Failed to process overdue invoices."
       });
     }
   });

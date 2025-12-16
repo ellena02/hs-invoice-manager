@@ -327,6 +327,7 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                   <TableHead>Deal</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Due Date</TableHead>
+                  <TableHead>Is Overdue</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Action</TableHead>
                 </TableRow>
@@ -353,17 +354,19 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                         )}
                       </TableCell>
                       <TableCell data-testid={`status-invoice-${invoice.id}`}>
-                        <div className="flex items-center gap-2">
-                          {getInvoiceStatusBadge(invoice.hs_invoice_status)}
-                          {isOverdue && (
-                            <Badge variant="destructive" className="text-xs">Overdue</Badge>
-                          )}
-                        </div>
+                        {getInvoiceStatusBadge(invoice.hs_invoice_status)}
                       </TableCell>
                       <TableCell data-testid={`text-invoice-due-date-${invoice.id}`}>
                         <span className={isOverdue ? "text-destructive font-medium" : ""}>
                           {formatDate(invoice.hs_due_date)}
                         </span>
+                      </TableCell>
+                      <TableCell data-testid={`text-invoice-overdue-${invoice.id}`}>
+                        {isOverdue ? (
+                          <span className="text-destructive font-medium">Yes</span>
+                        ) : (
+                          <span className="text-muted-foreground">No</span>
+                        )}
                       </TableCell>
                       <TableCell data-testid={`text-invoice-amount-${invoice.id}`}>
                         {formatCurrency(invoice.amount)}

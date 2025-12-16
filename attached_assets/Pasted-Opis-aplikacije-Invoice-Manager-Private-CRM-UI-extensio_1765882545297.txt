@@ -1,0 +1,280 @@
+Opis aplikacije: Invoice Manager (Private CRM UI extension + eksterni backend)
+
+Invoice Manager je private HubSpot aplikacija koja dodaje CRM Record Tab na Company record.
+
+Tab prikazuje:
+
+Toggle “Mark invoices as bad debt” koji upisuje/uklanja oznaku na company property bad_debt (single checkbox).
+
+Dve tabele:
+
+Associated Deals (objectTypeId 0-3)
+
+Associated Invoices (objectTypeId 0-53)
+
+Pošto je projekat na platform version 2025.2, HubSpot “app functions / serverless functions” se ne koriste za ovaj tok. Umesto toga, toggle poziva eksterni backend endpoint preko hubspot.fetch().
+
+Backend:
+
+prima companyId + badDebt
+
+koristi Private App Access Token (scope: crm.objects.companies.write)
+
+ažurira company property:
+
+bad_debt = "true" kada je toggle ON
+
+bad_debt = "false" kada je toggle OFF
+
+A) Backend kod (Node/Express) – /mark-bad-debt
+package.json
+{
+  "name": "invoice-manager-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@hubspot/api-client": "^9.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0"
+  }
+}
+
+index.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { Client as HubSpotClient } from "@hubspot/api-client";
+
+dotenv.config();
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
+if (!HS_PRIVATE_APP_TOKEN) {
+  console.error("Missing HS_PRIVATE_APP_TOKEN env var.");
+  process.exit(1);
+}
+
+const hubspotClient = new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
+
+app.use(cors());
+app.use(express.json());
+
+app.post("/mark-bad-debt", async (req, res) => {
+  try {
+    const { companyId, badDebt } = req.body || {};
+
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: "Missing companyId." });
+    }
+
+    const isChecked =
+      badDebt === true || badDebt === "true" || badDebt === 1 || badDebt === "1";
+
+    const newValue = isChecked ? "true" : "false"; // single checkbox expects "true"/"false"
+
+    await hubspotClient.crm.companies.basicApi.update(companyId, {
+      properties: { bad_debt: newValue },
+    });
+
+    return res.status(200).json({ success: true, bad_debt: newValue });
+  } catch (error) {
+    console.error("Backend mark-bad-debt error:", error?.response?.body || error);
+    return res.status(500).json({
+      success: false,
+      message:
+        error?.response?.body?.message || error?.message || "Unexpected backend error.",
+    });
+  }
+});
+
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+app.listen(port, () => console.log(`Backend listening on :${port}`));
+
+.env (lokalno)
+HS_PRIVATE_APP_TOKEN=PASTE_PRIVATE_APP_ACCESS_TOKEN_HERE
+PORT=3000
+
+
+Endpoint posle deploy-a (primer):
+
+POST https://<tvoj-backend-host>/mark-bad-debt
+
+B) HubSpot UI extension (CRM tab) – novi kod bez serverless
+1) Izmeni app-hsmeta.json (permittedUrls.fetch)
+
+Dodaj URL svog backenda u fetch listu.
+
+Pre:
+
+"permittedUrls": {
+  "fetch": ["https://api.hubapi.com"],
+  "iframe": [],
+  "img": []
+}
+
+
+Posle (primer):
+
+"permittedUrls": {
+  "fetch": [
+    "https://api.hubapi.com",
+    "https://invoice-manager-backend.onrender.com"
+  ],
+  "iframe": [],
+  "img": []
+}
+
+
+Mora biti tačan origin (bez path-a), npr. https://invoice-manager-backend.onrender.com
+
+2) Zameni cards/invoice-manager.tsx ovim kodom
+
+Ovo je tvoja verzija, ali:
+
+uklonjen runServerlessFunction
+
+dodato hubspot.fetch na backend
+
+import React, { useState } from "react";
+import { hubspot, Toggle, Text, Flex, Divider, Alert } from "@hubspot/ui-extensions";
+import { CrmAssociationTable } from "@hubspot/ui-extensions/crm";
+
+type InvoiceManagerProps = {
+  context: any;
+};
+
+// ✅ PROMENI OVO na svoj deploy URL:
+const BACKEND_ORIGIN = "https://invoice-manager-backend.onrender.com";
+const MARK_BAD_DEBT_URL = `${BACKEND_ORIGIN}/mark-bad-debt`;
+
+const InvoiceManagerCard: React.FC<InvoiceManagerProps> = ({ context }) => {
+  const companyId: string | undefined = context?.objectId || context?.crm?.objectId;
+
+  const initialBadDebt: boolean =
+    context?.properties?.bad_debt === "true" ||
+    context?.crm?.properties?.bad_debt === "true";
+
+  const [badDebt, setBadDebt] = useState<boolean>(initialBadDebt);
+  const [loading, setLoading] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const handleToggleChange = async (checked: boolean) => {
+    if (!companyId) {
+      setServerError("Missing company ID in context.");
+      return;
+    }
+
+    setLoading(true);
+    setServerError(null);
+    setSuccessMessage(null);
+
+    // optimistic UI
+    setBadDebt(checked);
+
+    try {
+      const response = await hubspot.fetch(MARK_BAD_DEBT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          companyId,
+          badDebt: checked,
+        },
+      });
+
+      const body = await response.json();
+
+      if (!body?.success) {
+        setServerError(body?.message || "Backend returned an error.");
+        // opciono rollback:
+        // setBadDebt(!checked);
+      } else {
+        setSuccessMessage("Bad debt status updated successfully.");
+      }
+    } catch (error: any) {
+      console.error("Error calling backend:", error);
+      setServerError(error?.message || "Failed to call backend.");
+      // opciono rollback:
+      // setBadDebt(!checked);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Flex direction="column" gap="medium">
+      <Text format={{ fontWeight: "bold" }}>Invoice Manager</Text>
+
+      <Flex direction="row" align="center" gap="small">
+        <Toggle
+          label="Mark invoices as bad debt"
+          checked={badDebt}
+          onChange={handleToggleChange}
+        />
+        {loading && <Text>Updating...</Text>}
+      </Flex>
+
+      {serverError && (
+        <Alert variant="error" title="Error">
+          {serverError}
+        </Alert>
+      )}
+
+      {successMessage && (
+        <Alert variant="success" title="Success">
+          {successMessage}
+        </Alert>
+      )}
+
+      <Divider />
+
+      <Text format={{ fontWeight: "bold" }}>Associated Deals</Text>
+      <CrmAssociationTable
+        objectTypeId="0-3"
+        propertyColumns={["dealname", "amount", "dealstage", "closedate"]}
+        searchable={true}
+        pagination={true}
+        pageSize={10}
+      />
+
+      <Divider />
+
+      <Text format={{ fontWeight: "bold" }}>Associated Invoices</Text>
+      <CrmAssociationTable
+        objectTypeId="0-53"
+        propertyColumns={["hs_invoice_number", "hs_invoice_status", "amount"]}
+        searchable={true}
+        pagination={true}
+        pageSize={10}
+      />
+    </Flex>
+  );
+};
+
+hubspot.extend<"crm.record.tab">(({ context }: any) => (
+  <InvoiceManagerCard context={context} />
+));
+
+C) Checklist da proradi
+
+Backend deployovan i radi:
+
+GET /health vraća { ok: true }
+
+POST /mark-bad-debt radi u Postman/curl
+
+app-hsmeta.json ima backend origin u permittedUrls.fetch
+
+cards/invoice-manager.tsx koristi hubspot.fetch i pravi URL ka backendu
+
+hs project build + hs project deploy
+
+App instalirana + tab prikazan na Company recordu

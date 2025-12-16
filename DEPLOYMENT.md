@@ -77,15 +77,6 @@ Kreiraj custom property na Company objektu:
 
 ### 3. Environment Variables (OBAVEZNO)
 
-U Render dashboard, dodaj ove environment varijable:
-
-| Variable | Opis | Primer |
-|----------|------|--------|
-| `HUBSPOT_CLIENT_ID` | Client ID iz HubSpot app settings | `xxxxxxxx-xxxx-xxxx-xxxx` |
-| `HUBSPOT_CLIENT_SECRET` | Client Secret iz HubSpot app settings | `xxxxxxxx-xxxx-xxxx-xxxx` |
-| `HUBSPOT_REDIRECT_URI` | Tvoj Render URL + callback path | `https://invoice-manager.onrender.com/auth/hubspot/callback` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
-| `SESSION_SECRET` | Random string za session encryption | `your-random-secret-string-here` |
 
 ### 4. Database (PostgreSQL)
 
@@ -120,7 +111,8 @@ U Render dashboard, dodaj ove environment varijable:
 | `/auth/status` | GET | Status konekcije |
 | `/api/health` | GET | Health check |
 | `/api/company/:id` | GET | Dohvata kompaniju sa deals/invoices |
-| `/api/mark-bad-debt` | POST | Markira kompaniju kao bad debt |
+| `/api/company/:id/invoice/:invoiceId/archive` | POST | Arhivira fakturu |
+| `/api/mark-bad-debt` | POST | Markira bad debt |
 
 ## Troubleshooting
 

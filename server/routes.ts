@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { Client as HubSpotClient } from "@hubspot/api-client";
-import { markBadDebtRequestSchema, archiveOverdueInvoicesRequestSchema } from "@shared/schema";
+import { markBadDebtRequestSchema, deleteOverdueInvoicesRequestSchema } from "@shared/schema";
 
 const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
@@ -9,6 +9,12 @@ let hubspotClient: HubSpotClient | null = null;
 if (HS_PRIVATE_APP_TOKEN) {
   hubspotClient = new HubSpotClient({ accessToken: HS_PRIVATE_APP_TOKEN });
 }
+
+// Mock state for demo mode (persists during session)
+const mockState = {
+  badDebt: false,
+  deletedInvoiceIds: new Set<string>()
+};
 
 export async function registerRoutes(
   httpServer: Server,
@@ -65,16 +71,21 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/company/:companyId/archive-overdue-invoices", async (req, res) => {
+  app.post("/api/company/:companyId/delete-overdue-invoices", async (req, res) => {
     try {
       const { companyId } = req.params;
 
       if (!hubspotClient) {
+        // Mock mode: simulate deleting overdue invoices
+        const mockDeletedInvoices = ["INV-2024-003"];
+        mockDeletedInvoices.forEach(inv => mockState.deletedInvoiceIds.add("103")); // ID of overdue invoice
+        mockState.badDebt = true;
+        
         return res.status(200).json({
           success: true,
-          archivedCount: 1,
-          archivedInvoices: ["INV-2024-003"],
-          message: "Mock response - HubSpot token not configured. In production, overdue invoices would be archived."
+          deletedCount: mockDeletedInvoices.length,
+          deletedInvoices: mockDeletedInvoices,
+          message: "Mock response - HubSpot token not configured. In production, overdue invoices would be permanently deleted."
         });
       }
 
@@ -105,13 +116,39 @@ export async function registerRoutes(
         }
       }
 
-      const archivedInvoices: string[] = [];
+      const deletedInvoices: string[] = [];
+      const failedInvoices: { number: string; reason: string }[] = [];
+      
       for (const invoice of overdueInvoices) {
         try {
-          await hubspotClient.crm.objects.basicApi.archive("invoices", invoice.id);
-          archivedInvoices.push(invoice.number);
-        } catch (e) {
-          console.error(`Failed to archive invoice ${invoice.id}:`, e);
+          // Use the purge/delete endpoint for permanent deletion
+          // HubSpot client doesn't have a direct purge method, so we use apiRequest
+          const response = await fetch(
+            `https://api.hubapi.com/crm/v3/objects/invoices/${invoice.id}`,
+            {
+              method: "DELETE",
+              headers: {
+                "Authorization": `Bearer ${HS_PRIVATE_APP_TOKEN}`,
+                "Content-Type": "application/json"
+              }
+            }
+          );
+          
+          if (response.ok || response.status === 204) {
+            deletedInvoices.push(invoice.number);
+          } else {
+            const errorBody = await response.json().catch(() => ({}));
+            failedInvoices.push({
+              number: invoice.number,
+              reason: errorBody.message || `HTTP ${response.status}`
+            });
+          }
+        } catch (e: any) {
+          console.error(`Failed to delete invoice ${invoice.id}:`, e);
+          failedInvoices.push({
+            number: invoice.number,
+            reason: e.message || "Unknown error"
+          });
         }
       }
 
@@ -119,19 +156,25 @@ export async function registerRoutes(
         properties: { bad_debt: "true" },
       });
 
+      let message = `Successfully deleted ${deletedInvoices.length} overdue invoice(s) and marked company as bad debt.`;
+      if (failedInvoices.length > 0) {
+        message += ` Failed to delete ${failedInvoices.length} invoice(s): ${failedInvoices.map(f => `${f.number} (${f.reason})`).join(", ")}`;
+      }
+
       return res.status(200).json({
         success: true,
-        archivedCount: archivedInvoices.length,
-        archivedInvoices,
-        message: `Successfully archived ${archivedInvoices.length} overdue invoice(s) and marked company as bad debt.`
+        deletedCount: deletedInvoices.length,
+        deletedInvoices,
+        failedInvoices,
+        message
       });
     } catch (error: any) {
-      console.error("Archive overdue invoices error:", error?.response?.body || error);
+      console.error("Delete overdue invoices error:", error?.response?.body || error);
       return res.status(500).json({
         success: false,
-        archivedCount: 0,
-        archivedInvoices: [],
-        message: error?.response?.body?.message || error?.message || "Failed to archive overdue invoices."
+        deletedCount: 0,
+        deletedInvoices: [],
+        message: error?.response?.body?.message || error?.message || "Failed to delete overdue invoices."
       });
     }
   });
@@ -141,18 +184,20 @@ export async function registerRoutes(
       const { companyId } = req.params;
 
       if (!hubspotClient) {
-        const mockInvoices = [
+        const allMockInvoices = [
           { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", amount: "25000" },
           { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "pending", amount: "15000" },
           { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "overdue", amount: "10000" },
         ];
+        // Filter out deleted invoices
+        const mockInvoices = allMockInvoices.filter(inv => !mockState.deletedInvoiceIds.has(inv.id));
         const overdueCount = mockInvoices.filter(inv => inv.hs_invoice_status === "overdue").length;
         
         return res.status(200).json({
           company: {
             id: companyId,
             name: "Demo Company",
-            bad_debt: "false"
+            bad_debt: mockState.badDebt ? "true" : "false"
           },
           deals: [
             { id: "1", dealname: "Enterprise License", amount: "50000", dealstage: "contractsent", closedate: "2024-01-15" },

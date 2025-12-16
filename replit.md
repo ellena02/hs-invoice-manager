@@ -14,7 +14,7 @@ Preferred communication style: Simple, everyday language.
 
 - **Statuses**: draft, open, paid, voided (HubSpot standard)
 - **Overdue Calculation**: An invoice is overdue when status is "open" AND due_date < today
-- **Archive Action**: Moves invoice to HubSpot recycle bin (hidden from reporting, restorable within 90 days)
+- **Bad Debt Action**: Marks the company with a bad_debt flag (does not archive invoices)
 
 ## System Architecture
 
@@ -45,8 +45,6 @@ Preferred communication style: Simple, everyday language.
 - `GET /api/health` - Health check with connection status
 - `GET /api/company/:companyId` - Fetch company data with deals and invoices
 - `POST /api/mark-bad-debt` - Updates company bad_debt property
-- `POST /api/company/:companyId/invoice/:invoiceId/archive` - Archive single invoice
-- `POST /api/company/:companyId/archive-overdue-invoices` - Archive all overdue invoices
 
 ### Data Layer
 - **ORM**: Drizzle ORM with PostgreSQL dialect

@@ -120,8 +120,7 @@ U Render dashboard, dodaj ove environment varijable:
 | `/auth/status` | GET | Status konekcije |
 | `/api/health` | GET | Health check |
 | `/api/company/:id` | GET | Dohvata kompaniju sa deals/invoices |
-| `/api/company/:id/invoice/:invoiceId/archive` | POST | Arhivira fakturu |
-| `/api/mark-bad-debt` | POST | Markira bad debt |
+| `/api/mark-bad-debt` | POST | Markira kompaniju kao bad debt |
 
 ## Troubleshooting
 

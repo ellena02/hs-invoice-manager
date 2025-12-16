@@ -15,8 +15,7 @@ const HS_PRIVATE_APP_TOKEN = process.env.HS_PRIVATE_APP_TOKEN;
 
 // Mock state for demo mode (persists during session)
 const mockState = {
-  badDebt: false,
-  deletedInvoiceIds: new Set<string>()
+  badDebt: false
 };
 
 // OAuth state storage for CSRF protection (in production, use session or Redis)
@@ -25,7 +24,8 @@ const oauthStates = new Map<string, { createdAt: number }>();
 // Clean up expired states (older than 10 minutes)
 function cleanupOAuthStates() {
   const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
-  for (const [state, data] of oauthStates.entries()) {
+  const entries = Array.from(oauthStates.entries());
+  for (const [state, data] of entries) {
     if (data.createdAt < tenMinutesAgo) {
       oauthStates.delete(state);
     }
@@ -256,6 +256,7 @@ export async function registerRoutes(
       const hubspotClient = await getHubSpotClient(portalId);
       if (!hubspotClient) {
         console.warn("HubSpot client not configured - returning mock response");
+        mockState.badDebt = isChecked;
         return res.status(200).json({ 
           success: true, 
           bad_debt: newValue,
@@ -278,191 +279,6 @@ export async function registerRoutes(
     }
   });
 
-  // Archive a single invoice and mark company as bad debt
-  app.post("/api/company/:companyId/invoice/:invoiceId/archive", async (req, res) => {
-    try {
-      const { companyId, invoiceId } = req.params;
-      const portalId = req.query.portalId as string;
-
-      const hubspotClient = await getHubSpotClient(portalId);
-      if (!hubspotClient) {
-        // Mock mode
-        mockState.deletedInvoiceIds.add(invoiceId);
-        mockState.badDebt = true;
-        
-        return res.status(200).json({
-          success: true,
-          invoiceId,
-          invoiceNumber: `INV-MOCK-${invoiceId}`,
-          message: "Mock response - Invoice archived and company marked as bad debt"
-        });
-      }
-
-      // Get invoice details first
-      let invoiceNumber = "";
-      try {
-        const invoice = await hubspotClient.crm.objects.basicApi.getById(
-          "invoices",
-          invoiceId,
-          ["hs_invoice_number"]
-        );
-        invoiceNumber = invoice.properties.hs_invoice_number || invoiceId;
-      } catch (e) {
-        invoiceNumber = invoiceId;
-      }
-
-      // Archive the invoice (move to recycle bin)
-      try {
-        await hubspotClient.crm.objects.basicApi.archive("invoices", invoiceId);
-      } catch (archiveError: any) {
-        return res.status(400).json({
-          success: false,
-          message: archiveError?.response?.body?.message || "Failed to archive invoice"
-        });
-      }
-
-      // Mark company as bad debt
-      await hubspotClient.crm.companies.basicApi.update(companyId, {
-        properties: { bad_debt: "true" },
-      });
-
-      return res.status(200).json({
-        success: true,
-        invoiceId,
-        invoiceNumber,
-        message: `Invoice ${invoiceNumber} archived and company marked as bad debt`
-      });
-    } catch (error: any) {
-      console.error("Archive invoice error:", error?.response?.body || error);
-      return res.status(500).json({
-        success: false,
-        message: error?.response?.body?.message || error?.message || "Failed to archive invoice"
-      });
-    }
-  });
-
-  // Archive all overdue invoices for a company
-  app.post("/api/company/:companyId/archive-overdue-invoices", async (req, res) => {
-    try {
-      const { companyId } = req.params;
-      const portalId = req.query.portalId as string;
-
-      const hubspotClient = await getHubSpotClient(portalId);
-      if (!hubspotClient) {
-        // Mock mode: simulate archiving overdue invoices
-        const allMockInvoices = [
-          { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15" },
-          { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15" },
-          { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01" },
-          { id: "104", hs_invoice_number: "INV-2024-004", hs_invoice_status: "open", hs_due_date: "2024-11-20" },
-          { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null },
-          { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01" },
-        ];
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const overdueInvoices = allMockInvoices.filter(inv => {
-          if (mockState.deletedInvoiceIds.has(inv.id)) return false;
-          if (inv.hs_invoice_status !== "open" || !inv.hs_due_date) return false;
-          const dueDate = new Date(inv.hs_due_date);
-          return dueDate < today;
-        });
-        
-        const archivedInvoiceNumbers = overdueInvoices.map(inv => inv.hs_invoice_number);
-        overdueInvoices.forEach(inv => mockState.deletedInvoiceIds.add(inv.id));
-        mockState.badDebt = true;
-        
-        return res.status(200).json({
-          success: true,
-          archivedCount: archivedInvoiceNumbers.length,
-          archivedInvoices: archivedInvoiceNumbers,
-          message: "Mock response - Overdue invoices archived (hidden from reporting)."
-        });
-      }
-
-      const invoicesResponse = await (hubspotClient.crm.associations.v4.basicApi as any).getPage(
-        "companies",
-        companyId,
-        "invoices"
-      );
-
-      const overdueInvoices: { id: string; number: string }[] = [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      for (const assoc of invoicesResponse.results || []) {
-        try {
-          const invoice = await hubspotClient.crm.objects.basicApi.getById(
-            "invoices",
-            assoc.id,
-            ["hs_invoice_number", "hs_invoice_status", "hs_due_date"]
-          );
-          const status = invoice.properties.hs_invoice_status?.toLowerCase() || "";
-          const dueDate = invoice.properties.hs_due_date;
-          
-          if (status === "open" && dueDate) {
-            const dueDateObj = new Date(dueDate);
-            if (dueDateObj < today) {
-              overdueInvoices.push({
-                id: invoice.id,
-                number: invoice.properties.hs_invoice_number || invoice.id
-              });
-            }
-          }
-        } catch (e) {
-          console.error(`Failed to fetch invoice ${assoc.id}:`, e);
-        }
-      }
-
-      const archivedInvoices: string[] = [];
-      const failedInvoices: { number: string; reason: string }[] = [];
-
-      for (const invoice of overdueInvoices) {
-        try {
-          await hubspotClient.crm.objects.basicApi.archive("invoices", invoice.id);
-          archivedInvoices.push(invoice.number);
-        } catch (e: any) {
-          failedInvoices.push({
-            number: invoice.number,
-            reason: e?.response?.body?.message || "Archive failed"
-          });
-        }
-      }
-
-      if (archivedInvoices.length > 0 || overdueInvoices.length > 0) {
-        await hubspotClient.crm.companies.basicApi.update(companyId, {
-          properties: { bad_debt: "true" },
-        });
-      }
-
-      let message = `Company marked as bad debt. `;
-      if (archivedInvoices.length > 0) {
-        message += `Archived ${archivedInvoices.length} overdue invoice(s): ${archivedInvoices.join(", ")}. `;
-        message += `They are now hidden from reporting and can be restored within 90 days.`;
-      }
-      if (failedInvoices.length > 0) {
-        message += ` Failed to archive ${failedInvoices.length} invoice(s): ${failedInvoices.map(f => `${f.number} (${f.reason})`).join(", ")}`;
-      }
-
-      return res.status(200).json({
-        success: true,
-        archivedCount: archivedInvoices.length,
-        archivedInvoices,
-        failedInvoices,
-        message: message.trim()
-      });
-    } catch (error: any) {
-      console.error("Archive overdue invoices error:", error?.response?.body || error);
-      return res.status(500).json({
-        success: false,
-        archivedCount: 0,
-        archivedInvoices: [],
-        message: error?.response?.body?.message || error?.message || "Failed to archive overdue invoices."
-      });
-    }
-  });
-
   app.get("/api/company/:companyId", async (req, res) => {
     try {
       const { companyId } = req.params;
@@ -475,7 +291,7 @@ export async function registerRoutes(
           { id: "2", dealname: "Support Package", amount: "12000", dealstage: "closedwon", closedate: "2024-02-20" },
           { id: "3", dealname: "Training Services", amount: "8500", dealstage: "qualifiedtobuy", closedate: "2024-03-10" },
         ];
-        const allMockInvoices = [
+        const mockInvoices = [
           { id: "101", hs_invoice_number: "INV-2024-001", hs_invoice_status: "paid", hs_due_date: "2024-11-15", amount: "25000", dealId: "1", dealName: "Enterprise License" },
           { id: "102", hs_invoice_number: "INV-2024-002", hs_invoice_status: "open", hs_due_date: "2025-01-15", amount: "15000", dealId: "2", dealName: "Support Package" },
           { id: "103", hs_invoice_number: "INV-2024-003", hs_invoice_status: "open", hs_due_date: "2024-12-01", amount: "10000", dealId: "3", dealName: "Training Services" },
@@ -483,7 +299,6 @@ export async function registerRoutes(
           { id: "105", hs_invoice_number: "INV-2024-005", hs_invoice_status: "draft", hs_due_date: null, amount: "8000", dealId: "2", dealName: "Support Package" },
           { id: "106", hs_invoice_number: "INV-2024-006", hs_invoice_status: "voided", hs_due_date: "2024-10-01", amount: "3000", dealId: "3", dealName: "Training Services" },
         ];
-        const mockInvoices = allMockInvoices.filter(inv => !mockState.deletedInvoiceIds.has(inv.id));
         
         const today = new Date();
         today.setHours(0, 0, 0, 0);

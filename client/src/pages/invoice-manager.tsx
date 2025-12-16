@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,14 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { 
   CheckCircle2, 
@@ -36,18 +27,18 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
-  Trash2
+  Ban
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { CompanyData, ArchiveOverdueInvoicesResponse, ArchiveSingleInvoiceResponse, Deal, Invoice } from "@shared/schema";
+import type { CompanyData, Deal, Invoice } from "@shared/schema";
 
 const DEMO_COMPANY_ID = "demo-company-123";
 const PAGE_SIZE = 10;
 
-function formatCurrency(amount: string | null): string {
-  if (!amount) return "-";
-  const num = parseFloat(amount);
-  if (isNaN(num)) return amount;
+function formatCurrency(amount: string | null | number): string {
+  if (amount === null || amount === undefined) return "-";
+  const num = typeof amount === "number" ? amount : parseFloat(amount);
+  if (isNaN(num)) return String(amount);
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -85,7 +76,6 @@ function getDealStageBadge(stage: string) {
 }
 
 function getInvoiceStatusBadge(status: string) {
-  // HubSpot invoice statuses: draft, open, paid, voided
   const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
     paid: { label: "Paid", variant: "default" },
     open: { label: "Open", variant: "secondary" },
@@ -98,7 +88,6 @@ function getInvoiceStatusBadge(status: string) {
 }
 
 function isInvoiceOverdue(invoice: Invoice): boolean {
-  // Overdue = status is "open" AND due_date < today
   if (invoice.hs_invoice_status.toLowerCase() !== "open") return false;
   if (!invoice.hs_due_date) return false;
   
@@ -257,11 +246,11 @@ function DealsTable({ deals, isLoading }: { deals: Deal[]; isLoading: boolean })
 interface InvoicesTableProps {
   invoices: Invoice[];
   isLoading: boolean;
-  onArchiveInvoice: (invoiceId: string) => void;
-  archivingInvoiceId: string | null;
+  onMarkBadDebt: (invoiceId: string) => void;
+  markingInvoiceId: string | null;
 }
 
-function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoiceId }: InvoicesTableProps) {
+function InvoicesTable({ invoices, isLoading, onMarkBadDebt, markingInvoiceId }: InvoicesTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -335,7 +324,7 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
               <TableBody>
                 {paginatedInvoices.map((invoice) => {
                   const isOverdue = isInvoiceOverdue(invoice);
-                  const isArchiving = archivingInvoiceId === invoice.id;
+                  const isMarking = markingInvoiceId === invoice.id;
                   
                   return (
                     <TableRow 
@@ -376,18 +365,18 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
                           <Button
                             variant="destructive"
                             size="sm"
-                            onClick={() => onArchiveInvoice(invoice.id)}
-                            disabled={isArchiving}
+                            onClick={() => onMarkBadDebt(invoice.id)}
+                            disabled={isMarking}
                             data-testid={`button-mark-bad-debt-${invoice.id}`}
                           >
-                            {isArchiving ? (
+                            {isMarking ? (
                               <>
                                 <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                                Archiving...
+                                Marking...
                               </>
                             ) : (
                               <>
-                                <Trash2 className="h-3 w-3 mr-1" />
+                                <Ban className="h-3 w-3 mr-1" />
                                 Mark Bad Debt
                               </>
                             )}
@@ -417,77 +406,79 @@ function InvoicesTable({ invoices, isLoading, onArchiveInvoice, archivingInvoice
 export default function InvoiceManager() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [archivingInvoiceId, setArchivingInvoiceId] = useState<string | null>(null);
-  const [isArchivingAll, setIsArchivingAll] = useState(false);
+  const [markingInvoiceId, setMarkingInvoiceId] = useState<string | null>(null);
 
   const { data: companyData, isLoading, refetch, isRefetching } = useQuery<CompanyData>({
     queryKey: ["/api/company", DEMO_COMPANY_ID],
   });
 
-  const archiveSingleInvoiceMutation = useMutation<ArchiveSingleInvoiceResponse, Error, string>({
-    mutationFn: async (invoiceId: string) => {
-      setArchivingInvoiceId(invoiceId);
-      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/invoice/${invoiceId}/archive`, {});
+  const markBadDebtMutation = useMutation({
+    mutationFn: async (_invoiceId: string) => {
+      setMarkingInvoiceId(_invoiceId);
+      const response = await apiRequest("POST", `/api/mark-bad-debt`, {
+        companyId: DEMO_COMPANY_ID,
+        badDebt: true
+      });
       return response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       setErrorMessage(null);
-      setArchivingInvoiceId(null);
-      setSuccessMessage(`Invoice archived and company marked as bad debt. Hidden from reporting.`);
+      setMarkingInvoiceId(null);
+      setSuccessMessage("Company marked as bad debt.");
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
-      setTimeout(() => setSuccessMessage(null), 8000);
+      setTimeout(() => setSuccessMessage(null), 5000);
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       setSuccessMessage(null);
-      setArchivingInvoiceId(null);
-      setErrorMessage(error.message || "Failed to archive invoice.");
+      setMarkingInvoiceId(null);
+      setErrorMessage(error.message || "Failed to mark as bad debt.");
       setTimeout(() => setErrorMessage(null), 5000);
     },
   });
 
-  const archiveAllOverdueMutation = useMutation<ArchiveOverdueInvoicesResponse, Error>({
+  const markAllBadDebtMutation = useMutation({
     mutationFn: async () => {
-      setIsArchivingAll(true);
-      const response = await apiRequest("POST", `/api/company/${DEMO_COMPANY_ID}/archive-overdue-invoices`, {});
+      const response = await apiRequest("POST", `/api/mark-bad-debt`, {
+        companyId: DEMO_COMPANY_ID,
+        badDebt: true
+      });
       return response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       setErrorMessage(null);
-      setIsArchivingAll(false);
-      let message = "Company marked as bad debt.";
-      if (data.archivedCount > 0) {
-        message += ` Archived ${data.archivedCount} invoice(s): ${data.archivedInvoices.join(", ")}. Hidden from reporting.`;
-      }
-      setSuccessMessage(message);
+      setSuccessMessage("Company marked as bad debt for all overdue invoices.");
       queryClient.invalidateQueries({ queryKey: ["/api/company", DEMO_COMPANY_ID] });
-      setTimeout(() => setSuccessMessage(null), 8000);
+      setTimeout(() => setSuccessMessage(null), 5000);
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       setSuccessMessage(null);
-      setIsArchivingAll(false);
-      setErrorMessage(error.message || "Failed to archive overdue invoices.");
+      setErrorMessage(error.message || "Failed to mark as bad debt.");
       setTimeout(() => setErrorMessage(null), 5000);
     },
   });
 
-  const overdueCount = companyData?.overdueCount || 0;
-  const overdueInvoices = companyData?.invoices?.filter(inv => isInvoiceOverdue(inv)) || [];
-  const totalOverdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
+  const invoices = companyData?.invoices || [];
+  const paidInvoices = invoices.filter(inv => inv.hs_invoice_status.toLowerCase() === "paid");
+  const overdueInvoices = invoices.filter(inv => isInvoiceOverdue(inv));
+  
+  const paidAmount = paidInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
+  const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + (parseFloat(inv.amount || "0") || 0), 0);
+  const overdueCount = overdueInvoices.length;
   const badDebtValue = companyData?.company?.bad_debt === "true";
 
-  const handleArchiveInvoice = (invoiceId: string) => {
-    archiveSingleInvoiceMutation.mutate(invoiceId);
+  const handleMarkBadDebt = (invoiceId: string) => {
+    markBadDebtMutation.mutate(invoiceId);
   };
 
-  const handleArchiveAllOverdue = () => {
-    archiveAllOverdueMutation.mutate();
+  const handleMarkAllBadDebt = () => {
+    markAllBadDebtMutation.mutate();
   };
 
   return (
     <div className="min-h-screen bg-background">
       <div className="w-full py-6 px-4 md:px-6 lg:px-8">
         <Card className="w-full">
-          <CardHeader className="flex flex-row items-center justify-between gap-4 pb-4">
+          <CardHeader className="flex flex-row items-start justify-between gap-4 pb-4">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-primary/10 rounded-md">
                 <Building2 className="h-5 w-5 text-primary" />
@@ -501,15 +492,34 @@ export default function InvoiceManager() {
                 </p>
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => refetch()}
-              disabled={isRefetching}
-              data-testid="button-refresh"
-            >
-              <RefreshCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-            </Button>
+            
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-4">
+                  <div className="text-right" data-testid="summary-paid">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Paid</p>
+                    <p className="text-lg font-semibold text-green-600 dark:text-green-400">
+                      {isLoading ? "-" : formatCurrency(paidAmount)}
+                    </p>
+                  </div>
+                  <div className="text-right" data-testid="summary-overdue">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Overdue</p>
+                    <p className="text-lg font-semibold text-destructive">
+                      {isLoading ? "-" : formatCurrency(overdueAmount)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => refetch()}
+                disabled={isRefetching}
+                data-testid="button-refresh"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
           </CardHeader>
           
           <CardContent className="space-y-6">
@@ -564,52 +574,46 @@ export default function InvoiceManager() {
                   Associated Invoices
                 </h3>
                 {overdueCount > 0 && (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <Badge variant="destructive" data-testid="badge-overdue-count">
-                      {overdueCount} Overdue
-                    </Badge>
-                    <span className="text-sm text-muted-foreground">
-                      ({formatCurrency(totalOverdueAmount.toString())} total)
-                    </span>
-                  </div>
+                  <Badge variant="destructive" data-testid="badge-overdue-count">
+                    {overdueCount} Overdue
+                  </Badge>
                 )}
               </div>
               {overdueCount > 0 && !badDebtValue && (
                 <div className="flex items-center gap-2">
                   <Button
                     variant="destructive"
-                    onClick={handleArchiveAllOverdue}
-                    disabled={isArchivingAll || archiveSingleInvoiceMutation.isPending}
+                    onClick={handleMarkAllBadDebt}
+                    disabled={markAllBadDebtMutation.isPending || markBadDebtMutation.isPending}
                     data-testid="button-mark-all-bad-debt"
                   >
-                    {isArchivingAll ? (
+                    {markAllBadDebtMutation.isPending ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        Archiving All...
+                        Marking...
                       </>
                     ) : (
                       <>
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Mark All Overdue as Bad Debt
+                        <Ban className="h-4 w-4 mr-2" />
+                        Mark Company as Bad Debt
                       </>
                     )}
                   </Button>
                   <span className="text-sm text-muted-foreground">
-                    Archive all {overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""} at once
+                    ({overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""})
                   </span>
                 </div>
               )}
               <InvoicesTable 
-                invoices={companyData?.invoices || []} 
+                invoices={invoices} 
                 isLoading={isLoading}
-                onArchiveInvoice={handleArchiveInvoice}
-                archivingInvoiceId={archivingInvoiceId}
+                onMarkBadDebt={handleMarkBadDebt}
+                markingInvoiceId={markingInvoiceId}
               />
             </div>
           </CardContent>
         </Card>
       </div>
-
     </div>
   );
 }
